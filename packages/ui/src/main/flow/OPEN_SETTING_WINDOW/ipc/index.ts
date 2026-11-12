@@ -604,7 +604,17 @@ export default function initIpc() {
       ipcMain.removeHandler('request-llm-for-test')
     })
     async function getLlmConfigList() {
-      return await readConfigFile('llm.json')
+      const llmConfigList = await readConfigFile('llm.json')
+      return (Array.isArray(llmConfigList) ? llmConfigList : []).filter((it) => {
+        const model = String(it?.model ?? '').trim()
+        return !(
+          it?.apiMode === 'decision' ||
+          it?.apiMode === 'jev' ||
+          /^(?:(?:[a-z0-9._-]+\/)?(?:~?typesafe\/)?jev(?:-(?:1(?:\.\d+)+|latest)(?:-\d{8})?)?|typesafe-ai\/jev)$/i.test(
+            model
+          )
+        )
+      })
     }
     ipcMain.handle('get-llm-config-for-test', getLlmConfigList)
     readNoReplyReminderLlmMockWindow?.once('closed', () => {

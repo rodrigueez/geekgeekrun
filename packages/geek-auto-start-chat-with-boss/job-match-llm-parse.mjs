@@ -17,7 +17,26 @@ export function getBaseURLFromCompleteApiUrl(url) {
     .replace(/\/completions\/?$/i, '')
 }
 
-export function pickJobMatchLlmConfig(configList) {
+export function isJevDecisionModel(model) {
+  return /^(?:(?:[a-z0-9._-]+\/)?(?:~?typesafe\/)?jev(?:-(?:1(?:\.\d+)+|latest)(?:-\d{8})?)?|typesafe-ai\/jev)$/i.test(
+    normalizeText(model)
+  )
+}
+
+export function isJevDecisionConfig(config) {
+  if (!config) {
+    return false
+  }
+  if (config.apiMode === 'decision' || config.apiMode === 'jev') {
+    return true
+  }
+  if (config.apiMode === 'chat' || config.apiMode === 'responses') {
+    return false
+  }
+  return isJevDecisionModel(config.model)
+}
+
+function pickWeightedConfig(configList) {
   const enabled = (Array.isArray(configList) ? configList : []).filter(
     (item) =>
       item?.enabled !== false &&
@@ -35,6 +54,29 @@ export function pickJobMatchLlmConfig(configList) {
     }
   }
   return weighted[Math.floor(Math.random() * weighted.length)] ?? enabled[0]
+}
+
+export function pickJobMatchLlmConfig(configList) {
+  return pickWeightedConfig(
+    (Array.isArray(configList) ? configList : []).filter(
+      (item) => !isJevDecisionConfig(item)
+    )
+  )
+}
+
+export function pickJobFilterPlanLlmConfig(configList) {
+  return pickJobMatchLlmConfig(configList)
+}
+
+export function pickJobFilterLlmConfig(configList) {
+  const enabled = (Array.isArray(configList) ? configList : []).filter(
+    (item) =>
+      item?.enabled !== false &&
+      getBaseURLFromCompleteApiUrl(item?.providerCompleteApiUrl) &&
+      normalizeText(item?.model)
+  )
+  const decisionConfigs = enabled.filter(isJevDecisionConfig)
+  return pickWeightedConfig(decisionConfigs.length ? decisionConfigs : enabled)
 }
 
 export function buildJobMatchMessages({ resumeText, job, deterministicScore }) {

@@ -9,6 +9,57 @@ function normalizeBaseURL(baseURL) {
   return String(baseURL ?? "").trim().replace(/\/+$/, "");
 }
 
+function resolveModelListURL({ baseURL, apiMode, decisionApiPath }) {
+  const normalizedBaseURL = normalizeBaseURL(baseURL);
+  if (apiMode !== "decision") {
+    return `${normalizedBaseURL}/models`;
+  }
+  const url = new URL(normalizedBaseURL);
+  const explicitPath = String(decisionApiPath ?? "").trim();
+  if (/^https?:\/\//i.test(explicitPath)) {
+    return explicitPath.replace(/\/systemone\/?$/i, "/models");
+  }
+  if (explicitPath) {
+    url.pathname = explicitPath.startsWith("/")
+      ? explicitPath
+      : `${url.pathname.replace(/\/+$/, "")}/${explicitPath}`;
+    return url.toString().replace(/\/systemone\/?$/i, "/models");
+  }
+  if (/\/systemone\/?$/i.test(url.pathname)) {
+    url.pathname = url.pathname.replace(/\/systemone\/?$/i, "/models");
+    return url.toString();
+  }
+  if (/\/models\/?$/i.test(url.pathname)) {
+    return url.toString();
+  }
+  if (/\/api\/v1$/i.test(url.pathname)) {
+    url.pathname = `${url.pathname}/models`;
+    return url.toString();
+  }
+  if (/\/v1$/i.test(url.pathname)) {
+    url.pathname = `${url.pathname}/models`;
+    return url.toString();
+  }
+  if (/\/api$/i.test(url.pathname)) {
+    url.pathname = `${url.pathname}/v1/models`;
+    return url.toString();
+  }
+  if (/\/typesafe\/v1$/i.test(url.pathname)) {
+    url.pathname = `${url.pathname}/models`;
+    return url.toString();
+  }
+  if (/\/typesafe$/i.test(url.pathname)) {
+    url.pathname = `${url.pathname}/v1/models`;
+    return url.toString();
+  }
+  if (!url.pathname.replace(/\/+$/, "")) {
+    url.pathname = "/api/v1/models/";
+    return url.toString();
+  }
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/api/v1/models/`;
+  return url.toString();
+}
+
 function normalizeHeaders(headers) {
   if (!headers) {
     return {};
@@ -25,6 +76,73 @@ function normalizeHeaders(headers) {
       .filter(([, value]) => value !== undefined && value !== null)
       .map(([key, value]) => [key, String(value)])
   );
+}
+
+function toPositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function normalizeReasoningLevels(item) {
+  const levels =
+    item?.reasoning_levels ??
+    item?.reasoning_efforts ??
+    item?.supported_reasoning_levels ??
+    item?.reasoning?.levels ??
+    item?.reasoning?.efforts ??
+    [];
+  const levelList = Array.isArray(levels)
+    ? levels
+    : levels && typeof levels === "object"
+      ? Object.keys(levels)
+      : [];
+  return levelList
+    .map((level) =>
+      typeof level === "string"
+        ? level
+        : level?.effort ?? level?.value ?? level?.name
+    )
+    .map((level) => String(level ?? "").trim())
+    .filter(Boolean);
+}
+
+export function normalizeModelListItem(item) {
+  const reasoningLevels = normalizeReasoningLevels(item);
+  const defaultParameters = item?.default_parameters ?? {};
+  return {
+    id: item?.id ?? item?.model ?? item?.name ?? "",
+    displayName: item?.display_name ?? item?.name ?? null,
+    ownedBy: item?.owned_by ?? null,
+    reasoning:
+      typeof item?.reasoning === "boolean"
+        ? item.reasoning
+        : reasoningLevels.length
+          ? true
+          : null,
+    reasoningLevels,
+    defaultReasoningEffort:
+      item?.default_reasoning_effort ??
+      defaultParameters.reasoning_effort ??
+      null,
+    maxOutputTokens:
+      toPositiveInteger(item?.max_output_tokens) ??
+      toPositiveInteger(defaultParameters.max_output_tokens),
+    defaultMaxOutputTokens: toPositiveInteger(
+      item?.default_max_output_tokens ??
+        item?.recommended_max_output_tokens ??
+        defaultParameters.max_output_tokens
+    ),
+    maxInputTokens: toPositiveInteger(item?.max_input_tokens),
+    contextLength: toPositiveInteger(
+      item?.context_length ?? item?.context_window
+    ),
+    supportedParameters: Array.isArray(item?.supported_parameters)
+      ? item.supported_parameters
+      : [],
+    type: item?.type ?? null,
+    endpoint: item?.endpoint ?? null,
+    nativeEndpoints: item?.native_endpoints ?? null
+  };
 }
 
 function hasAuthorizationHeader(headers) {
@@ -50,6 +168,16 @@ function createClient({ baseURL, apiKey, headers }) {
 
 function isReasoningModel(model) {
   return /(^|\/)(o[1-9]\d*|gpt-5|gpt-6)/i.test(String(model ?? ""));
+}
+
+export function shouldSendReasoningEffort({ model, reasoningSupported } = {}) {
+  if (reasoningSupported === true) {
+    return true;
+  }
+  if (reasoningSupported === false) {
+    return false;
+  }
+  return isReasoningModel(model);
 }
 
 function isGpt6Model(model) {
@@ -94,6 +222,7 @@ function getCapabilityCacheKey({
   baseURL,
   model,
   reasoningEffort,
+  reasoningSupported,
   jsonMode,
   maxOutputTokens,
   temperature
@@ -102,6 +231,7 @@ function getCapabilityCacheKey({
     normalizeBaseURL(baseURL),
     String(model ?? ""),
     reasoningEffort ?? "default",
+    reasoningSupported ?? "auto",
     Boolean(jsonMode),
     getMaxOutputTokens(maxOutputTokens),
     Number(temperature)
@@ -207,6 +337,7 @@ function buildChatParams({
   maxOutputTokens,
   temperature,
   reasoningEffort,
+  reasoningSupported,
   jsonMode
 }) {
   const params = {
@@ -214,7 +345,10 @@ function buildChatParams({
     messages,
     ...buildTokenLimitParams({ baseURL, model, maxOutputTokens })
   };
-  if (Number.isFinite(Number(temperature)) && !isReasoningModel(model)) {
+  if (
+    Number.isFinite(Number(temperature)) &&
+    !shouldSendReasoningEffort({ model, reasoningSupported })
+  ) {
     params.temperature = Number(temperature);
   }
   if (isDeepSeekEndpoint(baseURL)) {
@@ -227,7 +361,7 @@ function buildChatParams({
   } else if (
     reasoningEffort &&
     reasoningEffort !== "default" &&
-    isReasoningModel(model)
+    shouldSendReasoningEffort({ model, reasoningSupported })
   ) {
     params.reasoning_effort = getEffectiveReasoningEffort(model, reasoningEffort);
   }
@@ -286,6 +420,7 @@ function buildResponsesParams({
   messages,
   maxOutputTokens,
   reasoningEffort,
+  reasoningSupported,
   jsonMode
 }) {
   const systemMessages = messages
@@ -309,7 +444,8 @@ function buildResponsesParams({
   if (
     reasoningEffort &&
     reasoningEffort !== "default" &&
-    (isReasoningModel(model) || isDeepSeekEndpoint(baseURL))
+    (shouldSendReasoningEffort({ model, reasoningSupported }) ||
+      isDeepSeekEndpoint(baseURL))
   ) {
     params.reasoning = {
       effort: getEffectiveReasoningEffort(model, reasoningEffort)
@@ -351,6 +487,7 @@ export async function completes(
     maxOutputTokens,
     temperature = 0.1,
     reasoningEffort = "default",
+    reasoningSupported = null,
     jsonMode = true
   },
   messages
@@ -363,6 +500,7 @@ export async function completes(
     maxOutputTokens,
     temperature,
     reasoningEffort,
+    reasoningSupported,
     jsonMode
   };
   if (apiMode === "responses") {
@@ -373,7 +511,13 @@ export async function completes(
   return normalizeChatCompletion(await requestChatCompletion(client, options));
 }
 
-export async function listModels({ baseURL, apiKey, headers }) {
+export async function listModels({
+  baseURL,
+  apiKey,
+  headers,
+  apiMode,
+  decisionApiPath
+}) {
   const normalizedBaseURL = normalizeBaseURL(baseURL);
   if (!normalizedBaseURL) {
     throw new Error("Base URL 不能为空");
@@ -386,10 +530,17 @@ export async function listModels({ baseURL, apiKey, headers }) {
   if (normalizedApiKey && !hasAuthorizationHeader(requestHeaders)) {
     requestHeaders.Authorization = `Bearer ${normalizedApiKey}`;
   }
-  const response = await fetch(`${normalizedBaseURL}/models`, {
-    headers: requestHeaders,
-    signal: AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS)
-  });
+  const response = await fetch(
+    resolveModelListURL({
+      baseURL: normalizedBaseURL,
+      apiMode,
+      decisionApiPath
+    }),
+    {
+      headers: requestHeaders,
+      signal: AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS)
+    }
+  );
   const bodyText = await response.text();
   if (!response.ok) {
     throw new Error(
@@ -407,13 +558,5 @@ export async function listModels({ baseURL, apiKey, headers }) {
     : Array.isArray(body)
       ? body
       : [];
-  return modelList
-    .map((item) => ({
-      id: item?.id ?? item?.model ?? item?.name ?? "",
-      displayName: item?.display_name ?? item?.name ?? null,
-      ownedBy: item?.owned_by ?? null,
-      reasoning: item?.reasoning ?? null,
-      maxOutputTokens: item?.max_output_tokens ?? null
-    }))
-    .filter((item) => item.id);
+  return modelList.map(normalizeModelListItem).filter((item) => item.id);
 }

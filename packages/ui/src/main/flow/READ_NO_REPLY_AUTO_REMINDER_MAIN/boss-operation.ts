@@ -29,6 +29,16 @@ export const sendLookForwardReplyEmotion = async (page: Page) => {
 }
 
 const pickLlmConfigFromList = (llmConfigList, blockModelSet) => {
+  llmConfigList = llmConfigList.filter((it) => {
+    const model = String(it?.model ?? '').trim()
+    return !(
+      it?.apiMode === 'decision' ||
+      it?.apiMode === 'jev' ||
+      /^(?:(?:[a-z0-9._-]+\/)?(?:~?typesafe\/)?jev(?:-(?:1(?:\.\d+)+|latest)(?:-\d{8})?)?|typesafe-ai\/jev)$/i.test(
+        model
+      )
+    )
+  })
   if (llmConfigList.length === 1) {
     llmConfigList[0].enabled = true
     llmConfigList[0].serveWeight = SINGLE_ITEM_DEFAULT_SERVE_WEIGHT
@@ -213,6 +223,7 @@ export const requestNewMessageContent = async (
           maxOutputTokens: llmConfig.maxOutputTokens,
           temperature: llmConfig.temperature,
           reasoningEffort: llmConfig.reasoningEffort,
+          reasoningSupported: llmConfig.reasoningSupported,
           jsonMode: llmConfig.jsonMode
         },
         chatList

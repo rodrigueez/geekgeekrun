@@ -2,14 +2,22 @@ import { completes } from '@geekgeekrun/utils/gpt-request.mjs'
 import {
   buildJobMatchMessages,
   getBaseURLFromCompleteApiUrl,
+  isJevDecisionConfig,
+  isJevDecisionModel,
   parseJobMatchResponse,
+  pickJobFilterLlmConfig,
+  pickJobFilterPlanLlmConfig,
   pickJobMatchLlmConfig
 } from './job-match-llm-parse.mjs'
 
 export {
   buildJobMatchMessages,
   getBaseURLFromCompleteApiUrl,
+  isJevDecisionConfig,
+  isJevDecisionModel,
   parseJobMatchResponse,
+  pickJobFilterLlmConfig,
+  pickJobFilterPlanLlmConfig,
   pickJobMatchLlmConfig
 }
 
@@ -39,6 +47,7 @@ export async function requestJobMatchScore({
       ),
       temperature: 0.1,
       reasoningEffort: llmConfig.reasoningEffort,
+      reasoningSupported: llmConfig.reasoningSupported,
       jsonMode: true
     },
     buildJobMatchMessages({

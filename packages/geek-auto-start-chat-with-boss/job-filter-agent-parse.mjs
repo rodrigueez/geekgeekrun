@@ -18,7 +18,7 @@ function truncate(value, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}\n[已截断]` : text
 }
 
-function getJobInfo(job) {
+export function getJobInfo(job) {
   const jobInfo = job?.jobInfo ?? job ?? {}
   const bossInfo = job?.bossInfo ?? job ?? {}
   const skills =
@@ -83,6 +83,81 @@ export function buildJobFilterPlanMessages(criteria) {
   ]
 }
 
+function pickPlanEmploymentType(text) {
+  if (/兼职|\bpart[\s-]?time\b/i.test(text)) {
+    return '兼职'
+  }
+  if (/全职|\bfull[\s-]?time\b/i.test(text)) {
+    return '全职'
+  }
+  if (/实习|\bintern(?:ship)?\b/i.test(text)) {
+    return '实习'
+  }
+  if (/合同工|外包|contractor/i.test(text)) {
+    return '合同工'
+  }
+  return null
+}
+
+function pickPlanWorkMode(text) {
+  if (/线上|远程|居家|在家|remote|work\s+from\s+home|wfh/i.test(text)) {
+    return '线上'
+  }
+  if (/线下|坐班|到岗|现场|onsite|on-site/i.test(text)) {
+    return '线下'
+  }
+  if (/混合|hybrid/i.test(text)) {
+    return '混合'
+  }
+  return null
+}
+
+export function buildFallbackJobFilterPlan(criteria) {
+  const text = normalizeText(criteria)
+  const positiveText = text.replace(
+    /(?:不要|不找|排除|拒绝|不看|不接受|不考虑)[^，,。；;\n]{0,80}/gi,
+    ''
+  )
+  const employmentType = pickPlanEmploymentType(positiveText)
+  const workMode = pickPlanWorkMode(positiveText)
+  const negativeWindow = [
+    ...text.matchAll(
+      /(?:不要|不找|排除|拒绝|不看|不接受|不考虑)[^，,。；;\n]{0,80}/gi
+    )
+  ]
+    .map((item) => item[0])
+    .join('\n')
+  const negativeTerms = [
+    '全职',
+    '兼职',
+    '实习',
+    '合同工',
+    '外包',
+    '坐班',
+    '到岗',
+    '现场',
+    '线下',
+    '销售',
+    '保险'
+  ]
+  const mustNotHave = negativeTerms.filter((term) =>
+    negativeWindow.includes(term)
+  )
+  const mustHave = [
+    employmentType,
+    workMode === '线上' ? '线上' : null
+  ].filter(Boolean)
+  return {
+    roleKeywords: [],
+    employmentTypes: employmentType ? [employmentType] : [],
+    workModes: workMode ? [workMode] : [],
+    locations: [],
+    mustHave,
+    mustNotHave,
+    summary: text
+  }
+}
+
 export function parseJobFilterPlan(content) {
   const raw = normalizeText(content)
     .replace(/^```(?:json)?\s*/i, '')
@@ -110,12 +185,35 @@ export function parseJobFilterPlan(content) {
   }
 }
 
-export function buildJobSemanticFilterMessages({ criteria, plan, job, stage }) {
+export function buildJobSemanticFilterState({ criteria, plan, job, stage }) {
   const info = getJobInfo(job)
   const description =
     stage === 'detail'
       ? truncate(info.description, MAX_DESCRIPTION_CHARS)
       : '[列表阶段，尚无职位详情]'
+  return [
+    '## 用户要求',
+    truncate(criteria, MAX_CRITERIA_CHARS),
+    '',
+    '## 已整理的筛选计划',
+    JSON.stringify(plan ?? {}, null, 2),
+    '',
+    `## 当前阶段：${stage}`,
+    `职位名：${info.jobName}`,
+    `岗位方向：${info.positionName}`,
+    `技能标签：${info.skills.join('、')}`,
+    `薪资：${info.salaryDesc}`,
+    `城市：${info.cityName}`,
+    `经验：${info.jobExperience}`,
+    `公司：${info.brandName}`,
+    `招聘者活跃度：${info.activeTimeDesc}`,
+    '',
+    '职位描述：',
+    description
+  ].join('\n')
+}
+
+export function buildJobSemanticFilterMessages({ criteria, plan, job, stage }) {
   return [
     {
       role: 'system',
@@ -127,26 +225,7 @@ export function buildJobSemanticFilterMessages({ criteria, plan, job, stage }) {
     },
     {
       role: 'user',
-      content: [
-        '## 用户要求',
-        truncate(criteria, MAX_CRITERIA_CHARS),
-        '',
-        '## 已整理的筛选计划',
-        JSON.stringify(plan ?? {}, null, 2),
-        '',
-        `## 当前阶段：${stage}`,
-        `职位名：${info.jobName}`,
-        `岗位方向：${info.positionName}`,
-        `技能标签：${info.skills.join('、')}`,
-        `薪资：${info.salaryDesc}`,
-        `城市：${info.cityName}`,
-        `经验：${info.jobExperience}`,
-        `公司：${info.brandName}`,
-        `招聘者活跃度：${info.activeTimeDesc}`,
-        '',
-        '职位描述：',
-        description
-      ].join('\n')
+      content: buildJobSemanticFilterState({ criteria, plan, job, stage })
     }
   ]
 }

@@ -39,7 +39,10 @@
               支持推理模型：在“高级设置”里选择推理强度。本场景只需要一句话，默认会尽量关闭或降低思考，避免等待和多余 token。
             </li>
             <li>
-              填写 Base URL 后可点“获取模型”读取 <code>/v1/models</code>；不读取也可以直接手填模型 ID。
+              支持 Jev / System One 决策模型：API 协议选择“Jev / System One 决策接口”，可接 Jev 官方、OpenRouter、Magpie，或任何提供 System One 兼容接口的自定义 Base URL。
+            </li>
+            <li>
+              填写 Base URL 后可点“获取模型”读取对应的 <code>/models</code> 接口；不读取也可以直接手填模型 ID。
             </li>
             <li>
               请自行确保您所接入的服务商能够保护您的隐私。<b class="color-red"
@@ -147,14 +150,16 @@
                   placeholder="选择或直接输入模型 ID"
                   no-data-text="先填写 Base URL，再点击“获取模型”"
                   font-size-12px
+                  @change="(value) => handleModelChange(conf, value)"
                 >
                   <el-option
                     v-for="modelItem in modelOptions[conf.id] ?? []"
                     :key="modelItem.id"
                     :label="
-                      modelItem.displayName
+                      (modelItem.displayName
                         ? `${modelItem.id} · ${modelItem.displayName}`
-                        : modelItem.id
+                        : modelItem.id) +
+                      (modelItem.type === 'decision' ? ' · 决策模型' : '')
                     "
                     :value="modelItem.id"
                   />
@@ -180,39 +185,64 @@
                       <el-select v-model="conf.apiMode" font-size-12px>
                         <el-option label="Chat Completions（兼容性最好）" value="chat" />
                         <el-option label="Responses API（OpenAI / Magpie）" value="responses" />
+                        <el-option
+                          label="Jev / System One 决策接口"
+                          value="decision"
+                        />
                       </el-select>
                     </el-form-item>
-                    <el-form-item label="推理强度">
-                      <el-select v-model="conf.reasoningEffort" font-size-12px>
-                        <el-option label="默认（由服务商决定）" value="default" />
-                        <el-option label="关闭或最低思考（最快）" value="none" />
-                        <el-option label="低" value="low" />
-                        <el-option label="中" value="medium" />
-                        <el-option label="高" value="high" />
+                    <el-form-item
+                      v-if="conf.apiMode === 'decision'"
+                      label="决策接口路径（可选）"
+                      class="advanced-full"
+                    >
+                      <el-input
+                        v-model="conf.decisionApiPath"
+                        clearable
+                        placeholder="留空自动识别；可填 /v1/systemone/ 或完整 URL"
+                        font-size-12px
+                      ></el-input>
+                      <div class="advanced-hint">
+                        Jev 官方通常填 Base URL <code>https://jev-ai.org/api/v1</code>；
+                        Magpie 填 <code>http://127.0.0.1:3425/v1</code>，模型 ID 用
+                        <code>commandcode-plan/typesafe/jev</code>；它不会出现在
+                        Magpie 的 <code>/v1/models</code> 列表里。
+                      </div>
+                    </el-form-item>
+                    <el-form-item
+                      v-if="conf.apiMode !== 'decision'"
+                      label="推理强度"
+                    >
+                      <el-select
+                        v-model="conf.reasoningEffort"
+                        :disabled="isReasoningDisabled(conf)"
+                        font-size-12px
+                      >
+                        <el-option
+                          v-for="option in getReasoningOptions(conf)"
+                          :key="option.value"
+                          :label="option.label"
+                          :value="option.value"
+                        />
                       </el-select>
                     </el-form-item>
-                    <el-form-item label="最大输出 tokens">
+                    <el-form-item
+                      v-if="conf.apiMode !== 'decision'"
+                      label="最大输出 tokens"
+                    >
                       <el-input-number
                         v-model="conf.maxOutputTokens"
                         :min="64"
-                        :max="131072"
+                        :max="getMaxOutputLimit(conf)"
                         :step="64"
                         step-strictly
                         :precision="0"
                         controls-position="right"
                         font-size-12px
                       />
-                    </el-form-item>
-                    <el-form-item label="温度">
-                      <el-input-number
-                        v-model="conf.temperature"
-                        :min="0"
-                        :max="2"
-                        :step="0.1"
-                        :precision="1"
-                        controls-position="right"
-                        font-size-12px
-                      />
+                      <div v-if="getMaxOutputHint(conf)" class="advanced-hint">
+                        {{ getMaxOutputHint(conf) }}
+                      </div>
                     </el-form-item>
                     <el-form-item label="JSON 模式">
                       <el-switch v-model="conf.jsonMode" />
@@ -331,8 +361,8 @@ import { SINGLE_ITEM_DEFAULT_SERVE_WEIGHT } from '../../../../common/constant'
 import { v4 as uuid } from 'uuid'
 import { sleep } from '@geekgeekrun/utils/sleep.mjs'
 
-type LlmApiMode = 'chat' | 'responses'
-type LlmReasoningEffort = 'default' | 'none' | 'low' | 'medium' | 'high'
+type LlmApiMode = 'chat' | 'responses' | 'decision'
+type LlmReasoningEffort = string
 
 interface LlmConfigItem {
   id: string
@@ -343,9 +373,11 @@ interface LlmConfigItem {
   enabled: boolean
   apiMode: LlmApiMode
   reasoningEffort: LlmReasoningEffort
+  reasoningSupported?: boolean | null
   maxOutputTokens: number
   temperature: number
   jsonMode: boolean
+  decisionApiPath?: string
   headers?: Record<string, string>
 }
 
@@ -358,7 +390,16 @@ interface LlmModelOption {
   displayName: string | null
   ownedBy: string | null
   reasoning: boolean | null
+  reasoningLevels: string[]
+  defaultReasoningEffort: string | null
   maxOutputTokens: number | null
+  defaultMaxOutputTokens: number | null
+  maxInputTokens: number | null
+  contextLength: number | null
+  supportedParameters: string[]
+  type: string | null
+  endpoint: string | null
+  nativeEndpoints: string[] | null
 }
 
 const gtagRenderer = (name, params?: object) => {
@@ -378,9 +419,11 @@ function getNewConfigItem(): LlmConfigFormItem {
     enabled: true,
     apiMode: 'chat',
     reasoningEffort: 'default',
+    reasoningSupported: null,
     maxOutputTokens: 1024,
     temperature: 0.1,
     jsonMode: true,
+    decisionApiPath: '',
     headersText: ''
   }
 }
@@ -391,8 +434,143 @@ function createModelOption(id: string): LlmModelOption {
     displayName: null,
     ownedBy: null,
     reasoning: null,
-    maxOutputTokens: null
+    reasoningLevels: [],
+    defaultReasoningEffort: null,
+    maxOutputTokens: null,
+    defaultMaxOutputTokens: null,
+    maxInputTokens: null,
+    contextLength: null,
+    supportedParameters: [],
+    type: null,
+    endpoint: null,
+    nativeEndpoints: null
   }
+}
+
+function isJevDecisionModel(model: string) {
+  return /^(?:(?:[a-z0-9._-]+\/)?(?:~?typesafe\/)?jev(?:-(?:1(?:\.\d+)+|latest)(?:-\d{8})?)?|typesafe-ai\/jev)$/i.test(
+    String(model ?? '').trim()
+  )
+}
+
+const DEFAULT_REASONING_LEVELS = ['low', 'medium', 'high', 'xhigh']
+const REASONING_EFFORT_LABELS: Record<string, string> = {
+  default: '默认（服务商决定）',
+  none: '关闭',
+  minimal: '最低',
+  low: '低',
+  medium: '中',
+  high: '高',
+  xhigh: '极高',
+  max: '最大',
+  ultra: '最高'
+}
+
+function getSelectedModelOption(conf: LlmConfigFormItem) {
+  return (modelOptions.value[conf.id] ?? []).find(
+    (item) => item.id === conf.model
+  )
+}
+
+function getReasoningLevels(conf: LlmConfigFormItem) {
+  const selected = getSelectedModelOption(conf)
+  const levels = selected?.reasoningLevels?.length
+    ? selected.reasoningLevels
+    : DEFAULT_REASONING_LEVELS
+  return [...new Set(levels.map((level) => String(level).trim()).filter(Boolean))]
+}
+
+function isReasoningDisabled(conf: LlmConfigFormItem) {
+  return (
+    getSelectedModelOption(conf)?.reasoning === false ||
+    conf.reasoningSupported === false
+  )
+}
+
+function getReasoningOptions(conf: LlmConfigFormItem) {
+  if (isReasoningDisabled(conf)) {
+    return [{ value: 'default', label: '该模型不支持推理强度' }]
+  }
+  return [
+    { value: 'default', label: REASONING_EFFORT_LABELS.default },
+    ...getReasoningLevels(conf).map((level) => ({
+      value: level,
+      label: REASONING_EFFORT_LABELS[level] ?? level
+    }))
+  ]
+}
+
+function getMaxOutputLimit(conf: LlmConfigFormItem) {
+  return getSelectedModelOption(conf)?.maxOutputTokens ?? 131072
+}
+
+function getMaxOutputHint(conf: LlmConfigFormItem) {
+  const selected = getSelectedModelOption(conf)
+  if (!selected) {
+    return '未获取模型能力时，建议保持 512–2048。'
+  }
+  const parts = []
+  if (selected.defaultMaxOutputTokens) {
+    parts.push(`服务商默认 ${selected.defaultMaxOutputTokens.toLocaleString()}`)
+  }
+  if (selected.maxOutputTokens) {
+    parts.push(`服务商上限 ${selected.maxOutputTokens.toLocaleString()}`)
+  }
+  parts.push('当前程序一般 512–2048 足够')
+  return parts.join('；')
+}
+
+function applyModelCapabilities(
+  conf: LlmConfigFormItem,
+  { applyProviderDefaults = false } = {}
+) {
+  const selected = getSelectedModelOption(conf)
+  if (!selected) {
+    return
+  }
+  conf.reasoningSupported = selected.reasoning
+  const levels = getReasoningLevels(conf)
+  const allowedReasoningEfforts = new Set(['default', ...levels])
+  if (
+    applyProviderDefaults &&
+    selected.defaultReasoningEffort &&
+    allowedReasoningEfforts.has(selected.defaultReasoningEffort)
+  ) {
+    conf.reasoningEffort = selected.defaultReasoningEffort
+  } else if (!allowedReasoningEfforts.has(conf.reasoningEffort)) {
+    conf.reasoningEffort =
+      selected.defaultReasoningEffort &&
+      allowedReasoningEfforts.has(selected.defaultReasoningEffort)
+        ? selected.defaultReasoningEffort
+        : 'default'
+  }
+  if (applyProviderDefaults && selected.defaultMaxOutputTokens) {
+    conf.maxOutputTokens = selected.defaultMaxOutputTokens
+  }
+  const maxOutputLimit = selected.maxOutputTokens
+  if (
+    maxOutputLimit &&
+    Number(conf.maxOutputTokens) > maxOutputLimit
+  ) {
+    conf.maxOutputTokens = maxOutputLimit
+  }
+}
+
+function handleModelChange(conf: LlmConfigFormItem, model: string) {
+  const selected = (modelOptions.value[conf.id] ?? []).find(
+    (item) => item.id === model
+  )
+  conf.reasoningSupported = selected?.reasoning ?? null
+  if (selected?.type === 'decision' || isJevDecisionModel(model)) {
+    conf.apiMode = 'decision'
+    const endpoint =
+      selected?.endpoint ??
+      selected?.nativeEndpoints?.find((item) => /systemone/i.test(item))
+    if (endpoint && /systemone/i.test(endpoint)) {
+      conf.decisionApiPath = endpoint
+    }
+  }
+  applyModelCapabilities(conf, { applyProviderDefaults: true })
 }
 
 const formRef = ref<InstanceType<typeof ElForm>>()
@@ -556,6 +734,70 @@ const llmPresetList: {
   config: LlmPresetConfig
 }[] = [
   {
+    name: 'Jev 官方决策模型（jev-1.13）',
+    config: {
+      model: 'jev-1.13',
+      providerApiSecret: '',
+      providerCompleteApiUrl: 'https://jev-ai.org/api/v1',
+      serveWeight: 100,
+      enabled: true,
+      apiMode: 'decision',
+      decisionApiPath: '',
+      reasoningEffort: 'default',
+      maxOutputTokens: 128,
+      temperature: 0.1,
+      jsonMode: false
+    }
+  },
+  {
+    name: 'Magpie 本地 Jev 决策模型',
+    config: {
+      model: 'commandcode-plan/typesafe/jev',
+      providerApiSecret: '',
+      providerCompleteApiUrl: 'http://127.0.0.1:3425/v1',
+      serveWeight: 100,
+      enabled: true,
+      apiMode: 'decision',
+      decisionApiPath: '',
+      reasoningEffort: 'default',
+      maxOutputTokens: 128,
+      temperature: 0.1,
+      jsonMode: false
+    }
+  },
+  {
+    name: 'OpenRouter Jev 决策模型',
+    config: {
+      model: 'typesafe/jev-1.13',
+      providerApiSecret: '',
+      providerCompleteApiUrl: 'https://openrouter.ai/api',
+      serveWeight: 100,
+      enabled: true,
+      apiMode: 'decision',
+      decisionApiPath: '',
+      reasoningEffort: 'default',
+      maxOutputTokens: 128,
+      temperature: 0.1,
+      jsonMode: false
+    }
+  },
+  {
+    name: '自定义 System One 决策模型',
+    config: {
+      model: 'jev-1.13',
+      providerApiSecret: '',
+      providerCompleteApiUrl: '',
+      serveWeight: 100,
+      enabled: true,
+      apiMode: 'decision',
+      decisionApiPath: '',
+      reasoningEffort: 'default',
+      maxOutputTokens: 128,
+      temperature: 0.1,
+      jsonMode: false
+    }
+  },
+  {
     name: 'Magpie 本地网关（127.0.0.1:3425）',
     config: {
       model: 'group/gpt-6.1-sol',
@@ -649,6 +891,10 @@ const llmPresetList: {
 
 const providerList: Array<{ name: string; url: string }> = [
   {
+    name: 'Jev（官方文档 / API Key）',
+    url: 'https://jev-ai.org/docs/authentication/'
+  },
+  {
     name: 'DeepSeek',
     url: 'https://platform.deepseek.com/'
   },
@@ -702,9 +948,14 @@ async function handleFetchModels(conf: LlmConfigFormItem) {
     const models = await electron.ipcRenderer.invoke('fetch-llm-model-list', {
       baseURL: conf.providerCompleteApiUrl,
       apiKey: conf.providerApiSecret,
-      headers
+      headers,
+      apiMode: conf.apiMode,
+      decisionApiPath: conf.decisionApiPath
     })
     modelOptions.value[conf.id] = Array.isArray(models) ? models : []
+    if (conf.model) {
+      applyModelCapabilities(conf)
+    }
     if (!modelOptions.value[conf.id].length) {
       ElMessage.warning('接口没有返回模型，可以直接手填模型 ID')
     } else {
@@ -831,6 +1082,12 @@ const openExternalLink = (url) => {
     }
     .advanced-full {
       grid-column: 1 / -1;
+    }
+    .advanced-hint {
+      margin-top: 6px;
+      color: var(--el-text-color-secondary);
+      font-size: 12px;
+      line-height: 1.5;
     }
   }
   .serve-weight-config {

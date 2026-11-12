@@ -35,6 +35,8 @@ import {
   combineMatchScores
 } from './job-match-score.mjs'
 import {
+  pickJobFilterLlmConfig,
+  pickJobFilterPlanLlmConfig,
   pickJobMatchLlmConfig,
   requestJobMatchScore
 } from './job-match-llm.mjs'
@@ -65,6 +67,7 @@ import { testIfJobTitleOrDescriptionSuit } from './job-detail.mjs'
 import { setFilterCondition } from './job-filter.mjs'
 import { findConditionByStrategy } from './not-suit-strategy.mjs'
 import {
+  buildFallbackJobFilterPlan,
   evaluatePlanHardReject,
   getCriteriaHash,
   getJobSemanticInputHash
@@ -220,8 +223,12 @@ const jobMatchLlmMaxCallsPerRun = (() => {
   return Math.min(Math.floor(value), 500)
 })()
 const jobMatchLlmWeight = 0.3
-const jobMatchLlmConfig = pickJobMatchLlmConfig(readConfigFile('llm.json'))
+const llmConfigList = readConfigFile('llm.json')
+const jobMatchLlmConfig = pickJobMatchLlmConfig(llmConfigList)
 const jobMatchLlmModelId = jobMatchLlmConfig?.model ?? ''
+const jobFilterPlanLlmConfig = pickJobFilterPlanLlmConfig(llmConfigList)
+const jobSemanticLlmConfig = pickJobFilterLlmConfig(llmConfigList)
+const jobSemanticLlmModelId = jobSemanticLlmConfig?.model ?? ''
 const isJobMatchLlmScoringEnabled =
   jobMatchLlmEnabled &&
   isJobMatchScoringEnabled &&
@@ -260,7 +267,7 @@ const jobSemanticCriteriaHash = getCriteriaHash(jobSemanticFilterCriteria)
 const isJobSemanticFilterEnabled =
   jobSemanticFilterEnabled &&
   Boolean(jobSemanticFilterCriteria) &&
-  Boolean(jobMatchLlmConfig)
+  Boolean(jobSemanticLlmConfig)
 const jobSourcePerformanceEnabled =
   readConfigFile('boss.json').jobSourcePerformanceEnabled ?? true
 const jobSourcePerformanceMinChats = (() => {
@@ -891,12 +898,12 @@ async function toRecommendPage (hooks) {
   let jobFilterPlanPromise = null
 
   const getJobFilterPlan = async () => {
-    if (!isJobSemanticFilterEnabled) {
+    if (!isJobSemanticFilterEnabled || !jobFilterPlanLlmConfig) {
       return null
     }
     if (!jobFilterPlanPromise) {
       jobFilterPlanPromise = requestJobFilterPlan({
-        llmConfig: jobMatchLlmConfig,
+        llmConfig: jobFilterPlanLlmConfig,
         criteria: jobSemanticFilterCriteria
       }).catch((err) => {
         console.log('build job filter plan failed', err)
@@ -935,7 +942,7 @@ async function toRecommendPage (hooks) {
           encryptCurrentUserId: traversalState.encryptUserId,
           encryptJobId,
           criteriaHash: jobSemanticCriteriaHash,
-          modelId: jobMatchLlmModelId,
+          modelId: jobSemanticLlmModelId,
           stage
         },
         cacheContext
@@ -967,7 +974,9 @@ async function toRecommendPage (hooks) {
       return result
     }
 
-    const plan = await getJobFilterPlan()
+    const plan =
+      (await getJobFilterPlan()) ??
+      buildFallbackJobFilterPlan(jobSemanticFilterCriteria)
     let result = null
     if (stage === 'list' && jobSemanticFilterListPrecheck) {
       const hardRejectResult = evaluatePlanHardReject(job, plan ?? {})
@@ -986,7 +995,7 @@ async function toRecommendPage (hooks) {
       semanticFilterCallCount++
       try {
         result = await requestJobSemanticFilter({
-          llmConfig: jobMatchLlmConfig,
+          llmConfig: jobSemanticLlmConfig,
           criteria: jobSemanticFilterCriteria,
           plan,
           job,
@@ -1006,7 +1015,7 @@ async function toRecommendPage (hooks) {
         encryptCurrentUserId: traversalState.encryptUserId,
         encryptJobId,
         criteriaHash: jobSemanticCriteriaHash,
-        modelId: jobMatchLlmModelId,
+        modelId: jobSemanticLlmModelId,
         stage,
         matchResult: result.match ? 1 : 0,
         confidence: result.confidence,
