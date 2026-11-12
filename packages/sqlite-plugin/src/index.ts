@@ -193,18 +193,22 @@ export default class SqlitePlugin {
       'SqlitePlugin',
       (page) => {
         page.on('response', async (response) => {
-          const ds = await this.initPromise;
-          if (response.url().startsWith('https://www.zhipin.com/wapi/zpgeek/job/detail.json')) {
-            const data = await response.json()
-            if (data.code === 0) {
-              await saveJobInfoFromRecommendPage(await ds, data.zpData)
-              await saveJobHireStatusRecord(await ds, {
-                encryptJobId: data.zpData.jobInfo.encryptId,
-                encryptCurrentUserId: this.userInfo?.encryptUserId,
-                hireStatus: JobHireStatus.HIRING,
-                lastSeenDate: new Date()
-              })
+          try {
+            const ds = await this.initPromise;
+            if (response.url().startsWith('https://www.zhipin.com/wapi/zpgeek/job/detail.json')) {
+              const data = await response.json()
+              if (data.code === 0) {
+                await saveJobInfoFromRecommendPage(await ds, data.zpData)
+                await saveJobHireStatusRecord(await ds, {
+                  encryptJobId: data.zpData.jobInfo.encryptId,
+                  encryptCurrentUserId: this.userInfo?.encryptUserId,
+                  hireStatus: JobHireStatus.HIRING,
+                  lastSeenDate: new Date()
+                })
+              }
             }
+          } catch (err) {
+            console.log('save job detail response failed', err)
           }
         })
       }
