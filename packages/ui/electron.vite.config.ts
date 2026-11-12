@@ -7,6 +7,32 @@ import transformerDirective from '@unocss/transformer-directives'
 import Replace from 'unplugin-replace/vite'
 
 process.env = { ...process.env, ...loadEnv(process.env.NODE_ENV!, process.cwd()) }
+
+const optionalTypeormDriverStub = resolve('src/main/utils/optional-driver-stub.ts')
+const optionalTypeormDrivers = [
+  '@google-cloud/spanner',
+  '@sap/hana-client',
+  '@sap/hana-client/extension/Stream',
+  'ioredis',
+  'mongodb',
+  'mssql',
+  'mysql',
+  'mysql2',
+  'oracledb',
+  'pg',
+  'pg-native',
+  'pg-query-stream',
+  'redis',
+  'sql.js',
+  'sqlite3',
+  'typeorm-aurora-data-api-driver'
+]
+
+const optionalTypeormDriverAlias = optionalTypeormDrivers.map((driver) => ({
+  find: new RegExp(`^${driver.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`),
+  replacement: optionalTypeormDriverStub
+}))
+
 const mainPlugins = [
   externalizeDepsPlugin({
     exclude: [
@@ -59,6 +85,9 @@ if (process.env.NODE_ENV) {
 
 export default defineConfig({
   main: {
+    resolve: {
+      alias: optionalTypeormDriverAlias
+    },
     build: {
       rollupOptions: {
         external: []
