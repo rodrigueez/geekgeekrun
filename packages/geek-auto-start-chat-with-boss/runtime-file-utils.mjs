@@ -77,6 +77,7 @@ if (
     path.join(configFolderPath, 'common-job-condition-config.json')
   )
 ) {
+  ensureRuntimeFolderPathExist()
   let bossConfig = null
   if (
     fs.existsSync(
@@ -177,7 +178,7 @@ if (
   }
 }
 
-const ensureRuntimeFolderPathExist = () => {
+function ensureRuntimeFolderPathExist() {
   if (!fs.existsSync(runtimeFolderPath)) {
     fs.mkdirSync(runtimeFolderPath)
   }
