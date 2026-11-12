@@ -82,11 +82,13 @@ async function closeChatDialog(page) {
 export async function chatWithCandidates({
   batchSize = 10,
   dailyLimit = 20,
-  profileId = ''
+  profileId = '',
+  onlyJobId = ''
 }: {
   batchSize?: number
   dailyLimit?: number
   profileId?: string
+  onlyJobId?: string
 } = {}) {
   const quota = readQuota()
   const remainingToday = Math.max(dailyLimit - quota.count, 0)
@@ -100,11 +102,15 @@ export async function chatWithCandidates({
     }
   }
 
-  const candidates = (await getJobCandidatesByStatus({
+  const fetchedCandidates = (await getJobCandidatesByStatus({
     statusList: [STATUS.QUEUED],
     profileId,
-    limit: Math.min(batchSize, remainingToday)
+    limit: onlyJobId ? 200 : Math.min(batchSize, remainingToday)
   })) as Array<{ encryptJobId: string; encryptCurrentUserId: string; profileId: string }>
+
+  const candidates = onlyJobId
+    ? fetchedCandidates.filter((candidate) => candidate.encryptJobId === onlyJobId)
+    : fetchedCandidates
 
   if (!candidates.length) {
     return {

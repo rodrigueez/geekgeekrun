@@ -431,7 +431,8 @@ export default function initIpc() {
       return await chatWithCandidates({
         batchSize: Number(payload?.batchSize) || 10,
         dailyLimit: Number(payload?.dailyLimit) || 20,
-        profileId: activeProfile?.id ?? ''
+        profileId: activeProfile?.id ?? '',
+        onlyJobId: payload?.onlyJobId ?? ''
       })
     } finally {
       candidateChatRunning = false

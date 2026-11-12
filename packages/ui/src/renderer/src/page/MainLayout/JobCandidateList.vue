@@ -71,6 +71,14 @@
         <ElTableColumn label="操作" width="190" fixed="right">
           <template #default="{ row }">
             <ElButton
+              v-if="row.status !== Status.CHATTED && row.status !== Status.EXCLUDED"
+              link
+              type="primary"
+              size="small"
+              :loading="isChatting"
+              @click="handleChatOne(row)"
+            >开聊</ElButton>
+            <ElButton
               v-if="row.status !== Status.QUEUED && row.status !== Status.CHATTED"
               link
               type="primary"
@@ -224,13 +232,14 @@ async function setStatus(row, status) {
   await getList()
 }
 
-async function handleStartChat() {
+async function handleStartChat({ onlyJobId = '' }: { onlyJobId?: string } = {}) {
   isChatting.value = true
   chatProgressText.value = '正在启动浏览器…'
   try {
     const res = await window.electron.ipcRenderer.invoke('start-chat-with-candidates', {
       batchSize: batchSize.value,
-      dailyLimit: dailyLimit.value
+      dailyLimit: dailyLimit.value,
+      onlyJobId
     })
     if (!res?.ok) {
       const reasonMap = {
@@ -248,6 +257,17 @@ async function handleStartChat() {
     chatProgressText.value = ''
     await getList()
   }
+}
+
+async function handleChatOne(row) {
+  if (row.status !== Status.QUEUED) {
+    await window.electron.ipcRenderer.invoke('set-job-candidate-status', {
+      encryptJobId: row.encryptJobId,
+      profileId: row.profileId,
+      status: Status.QUEUED
+    })
+  }
+  await handleStartChat({ onlyJobId: row.encryptJobId })
 }
 
 function openJobOnline(encryptJobId) {
