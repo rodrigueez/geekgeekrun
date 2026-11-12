@@ -11,6 +11,16 @@
   "staticCombineRecommendJobFilterConditions": [],
   "isSkipEmptyConditionForCombineRecommendJobFilter": true,
   "maxRecommendJobFilterCombinations": 500,
+  "jobMatchEnabled": true,
+  "jobMatchMinScore": 0,
+  "jobMatchWeights": {
+    "title": 25,
+    "skills": 35,
+    "salary": 15,
+    "experience": 10,
+    "company": 10,
+    "activity": 5
+  },
   "expectJobRegExpStr": "",
   "expectJobNameRegExpStr": "",
   "expectJobTypeRegExpStr": "",

@@ -25,6 +25,12 @@ import {
   rotateListToKey,
   findCheckpointBySourceKey
 } from './job-traversal.mjs'
+import {
+  buildResumeProfile,
+  normalizeMatchWeights,
+  rankJobCandidates,
+  scoreJobMatch
+} from './job-match-score.mjs'
 import { default as jobFilterConditions } from './internal-config/job-filter-conditions-20241002.json'
 import { default as rawIndustryFilterExemption } from './internal-config/job-filter-industry-filter-exemption-20241002.json'
 import { ChatStartupFrom } from '@geekgeekrun/sqlite-plugin/dist/entity/ChatStartupLog'
@@ -142,6 +148,19 @@ const maxRecommendJobFilterCombinations = (() => {
   }
   return Math.floor(Math.min(value, 5000))
 })()
+const jobMatchEnabled = readConfigFile('boss.json').jobMatchEnabled ?? true
+const jobMatchMinScore = (() => {
+  const value = Number(readConfigFile('boss.json').jobMatchMinScore)
+  if (!Number.isFinite(value) || value < 0) {
+    return 0
+  }
+  return Math.min(Math.floor(value), 100)
+})()
+const jobMatchWeights = normalizeMatchWeights(
+  readConfigFile('boss.json').jobMatchWeights
+)
+const resumeProfile = buildResumeProfile(readConfigFile('resumes.json')?.[0])
+const isJobMatchScoringEnabled = jobMatchEnabled && resumeProfile.isUsable
 if (!checkAnyCombineBossRecommendFilterHasCondition(anyCombineRecommendJobFilter)) {
   isSkipEmptyConditionForCombineRecommendJobFilter = false
 }
@@ -356,6 +375,36 @@ function checkIfSalarySuit(salaryDesc) {
     return hasIntersection(theirSalaryInterval, ourSalaryInterval)
   }
   return true
+}
+
+function getJobMatchOptionsForListJob(job) {
+  return {
+    salarySuit: isSalaryFilterEnabled ? checkIfSalarySuit(job.salaryDesc) : null,
+    experienceSuit: expectWorkExpList.length
+      ? expectWorkExpList.includes(job.jobExperience)
+      : null,
+    companyPreferred: enableCompanyAllowList
+      ? [...expectCompanySet].some(
+          (name) => job.brandName?.toLowerCase?.()?.includes(name.toLowerCase())
+        )
+      : null
+  }
+}
+
+function getJobMatchOptionsForDetailJob(selectedJobData) {
+  return {
+    salarySuit: isSalaryFilterEnabled
+      ? checkIfSalarySuit(selectedJobData?.salaryDesc)
+      : null,
+    experienceSuit: expectWorkExpList.length
+      ? expectWorkExpList.includes(selectedJobData?.jobExperience)
+      : null,
+    companyPreferred: enableCompanyAllowList
+      ? [...expectCompanySet].some(
+          (name) => selectedJobData?.brandName?.toLowerCase?.()?.includes(name.toLowerCase())
+        )
+      : null
+  }
 }
 
 async function markJobAsNotSuitInRecommendPage (reasonCode) {
@@ -1138,66 +1187,77 @@ async function toRecommendPage (hooks) {
               let hasReachLastPage = false
               let targetJobIndex = -1
               let targetJobData, selectedJobData // they show be same; one is from list, another is from detail
-              function getTempTargetJobIndexToCheckDetail () {
-                return jobListData.findIndex(it => {
-                  return !blockBossNotNewChat.has(it.encryptBossId) &&
-                    !blockBossNotActive.has(it.encryptBossId) &&
-                    !blockJobNotSuit.has(it.encryptJobId) &&
-                    !blockJobNotHiring.has(it.encryptJobId) &&
-                    !traversalState.processedJobIds.has(it.encryptJobId) &&
+              let currentJobMatchScore = null
+              const isTempTargetJobEligible = (it) => {
+                return !blockBossNotNewChat.has(it.encryptBossId) &&
+                  !blockBossNotActive.has(it.encryptBossId) &&
+                  !blockJobNotSuit.has(it.encryptJobId) &&
+                  !blockJobNotHiring.has(it.encryptJobId) &&
+                  !traversalState.processedJobIds.has(it.encryptJobId) &&
+                  (
                     (
+                      enableCompanyAllowList ?
+                        [...expectCompanySet].find(
+                          name => it.brandName?.toLowerCase?.()?.includes(name.toLowerCase())
+                        )
+                        :
+                        true
+                    ) || (
+                      // enter job detail to mark as not suit for city filter
                       (
-                        enableCompanyAllowList ?
-                          [...expectCompanySet].find(
-                            name => it.brandName?.toLowerCase?.()?.includes(name.toLowerCase())
-                          )
-                          :
-                          true
-                      ) || (
-                        // enter job detail to mark as not suit for city filter
-                        (
-                          Array.isArray(expectCityList) &&
-                          expectCityList.length &&
-                          [
-                            MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS,
-                            MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL
-                          ].includes(expectCityNotMatchStrategy) &&
-                          strategyScopeOptionWhenMarkJobCityNotMatch === StrategyScopeOptionWhenMarkJobNotMatch.ALL_JOB
-                        ) ? !expectCityList.includes(it.cityName) : false
-                      ) || (
-                        // enter job detail to mark as not suit for work exp filter
-                        (
-                          Array.isArray(expectWorkExpList) &&
-                          expectWorkExpList.length &&
-                          [
-                            MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS,
-                            MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL
-                          ].includes(expectWorkExpNotMatchStrategy) &&
-                          strategyScopeOptionWhenMarkJobWorkExpNotMatch === StrategyScopeOptionWhenMarkJobNotMatch.ALL_JOB
-                        ) ? !expectWorkExpList.includes(it.jobExperience) : false
-                      ) || (
-                        // enter job detail to mark as not suit for salary filter
-                        (
-                          isSalaryFilterEnabled &&
-                          [
-                            MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS,
-                            MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL
-                          ].includes(expectSalaryNotMatchStrategy) &&
-                          strategyScopeOptionWhenMarkSalaryNotMatch === StrategyScopeOptionWhenMarkJobNotMatch.ALL_JOB
-                        ) ? !checkIfSalarySuit(it.salaryDesc) : false
-                      ) || (
-                        // enter job detail to mark as not suit for company name filter
-                        !!blockCompanyNameRegExp &&
-                        blockCompanyNameRegExp.test(it.brandName?.toLowerCase?.() ?? '') &&
-                          [
-                            MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS,
-                            MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL
-                          ].includes(blockCompanyNameRegMatchStrategy)
-                      )
+                        Array.isArray(expectCityList) &&
+                        expectCityList.length &&
+                        [
+                          MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS,
+                          MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL
+                        ].includes(expectCityNotMatchStrategy) &&
+                        strategyScopeOptionWhenMarkJobCityNotMatch === StrategyScopeOptionWhenMarkJobNotMatch.ALL_JOB
+                      ) ? !expectCityList.includes(it.cityName) : false
+                    ) || (
+                      // enter job detail to mark as not suit for work exp filter
+                      (
+                        Array.isArray(expectWorkExpList) &&
+                        expectWorkExpList.length &&
+                        [
+                          MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS,
+                          MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL
+                        ].includes(expectWorkExpNotMatchStrategy) &&
+                        strategyScopeOptionWhenMarkJobWorkExpNotMatch === StrategyScopeOptionWhenMarkJobNotMatch.ALL_JOB
+                      ) ? !expectWorkExpList.includes(it.jobExperience) : false
+                    ) || (
+                      // enter job detail to mark as not suit for salary filter
+                      (
+                        isSalaryFilterEnabled &&
+                        [
+                          MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS,
+                          MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL
+                        ].includes(expectSalaryNotMatchStrategy) &&
+                        strategyScopeOptionWhenMarkSalaryNotMatch === StrategyScopeOptionWhenMarkJobNotMatch.ALL_JOB
+                      ) ? !checkIfSalarySuit(it.salaryDesc) : false
+                    ) || (
+                      // enter job detail to mark as not suit for company name filter
+                      !!blockCompanyNameRegExp &&
+                      blockCompanyNameRegExp.test(it.brandName?.toLowerCase?.() ?? '') &&
+                        [
+                          MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS,
+                          MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL
+                        ].includes(blockCompanyNameRegMatchStrategy)
                     )
+                  )
+              }
+              const getRankedTargetJobs = () => {
+                return rankJobCandidates(jobListData, {
+                  profile: isJobMatchScoringEnabled ? resumeProfile : null,
+                  weights: jobMatchWeights,
+                  isEligible: isTempTargetJobEligible,
+                  getOptions: getJobMatchOptionsForListJob
                 })
               }
+              function getTempTargetJobIndexToCheckDetail () {
+                return getRankedTargetJobs()[0]?.index ?? -1
+              }
               continueFind: while (targetJobIndex < 0 && !hasReachLastPage) {
+                currentJobMatchScore = null
                 // when disable company allow list, we will believe that the first one in the list is your expect job.
                 let tempTargetJobIndexToCheckDetail = getTempTargetJobIndexToCheckDetail()
                 while (tempTargetJobIndexToCheckDetail < 0 && !hasReachLastPage) {
@@ -1283,6 +1343,14 @@ async function toRecommendPage (hooks) {
                   })
                   targetJobData = await page.evaluate('document.querySelector(".job-detail-box").__vue__.data')
                   selectedJobData = await page.evaluate('document.querySelector(".page-jobs-main").__vue__.currentJob')
+                  const listMatchResult = scoreJobMatch(
+                    jobListData[tempTargetJobIndexToCheckDetail],
+                    isJobMatchScoringEnabled ? resumeProfile : null,
+                    {
+                      weights: jobMatchWeights,
+                      ...getJobMatchOptionsForListJob(jobListData[tempTargetJobIndexToCheckDetail])
+                    }
+                  )
                   // save the job detail info
                   await hooks.jobDetailIsGetFromRecommendList?.promise(targetJobData)
                   traversalState.processedJobIds.add(targetJobData.jobInfo.encryptId)
@@ -1295,9 +1363,48 @@ async function toRecommendPage (hooks) {
                     sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
                     searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
                     filterConditionKey: activeFilterConditionKey ?? undefined,
-                    filterConditionJson: activeFilterConditionJson ?? undefined
+                    filterConditionJson: activeFilterConditionJson ?? undefined,
+                    matchScore: listMatchResult.isScored ? listMatchResult.score : undefined
                   }])
                   await saveTraversalCheckpoint(targetJobData.jobInfo.encryptId)
+
+                  const detailMatchResult = scoreJobMatch(
+                    targetJobData,
+                    isJobMatchScoringEnabled ? resumeProfile : null,
+                    {
+                      weights: jobMatchWeights,
+                      ...getJobMatchOptionsForDetailJob(selectedJobData)
+                    }
+                  )
+                  currentJobMatchScore = detailMatchResult.isScored
+                    ? detailMatchResult.score
+                    : null
+                  if (
+                    isJobMatchScoringEnabled &&
+                    jobMatchMinScore > 0 &&
+                    detailMatchResult.isScored &&
+                    detailMatchResult.score < jobMatchMinScore
+                  ) {
+                    blockJobNotSuit.add(targetJobData.jobInfo.encryptId)
+                    await emitFunnelEvents([{
+                      encryptJobId: targetJobData.jobInfo.encryptId,
+                      encryptBossId: targetJobData.jobInfo.encryptUserId,
+                      eventType: JobFunnelEventType.LOW_MATCH_SCORE,
+                      eventDate: new Date(),
+                      jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+                      sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                      searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                      filterConditionKey: activeFilterConditionKey ?? undefined,
+                      filterConditionJson: activeFilterConditionJson ?? undefined,
+                      matchScore: detailMatchResult.score,
+                      extInfo: JSON.stringify({
+                        reasons: detailMatchResult.reasons,
+                        components: detailMatchResult.components
+                      })
+                    }])
+                    await saveTraversalCheckpoint(targetJobData.jobInfo.encryptId)
+                    continue continueFind
+                  }
 
                   //#region collect not suit reasons
                   const notSuitReasonIdToStrategyMap = {}
@@ -1763,7 +1870,8 @@ async function toRecommendPage (hooks) {
               sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
               searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
               filterConditionKey: activeFilterConditionKey ?? undefined,
-              filterConditionJson: activeFilterConditionJson ?? undefined
+              filterConditionJson: activeFilterConditionJson ?? undefined,
+              matchScore: currentJobMatchScore ?? undefined
             }])
             await saveTraversalCheckpoint(targetJobData.jobInfo.encryptId)
 

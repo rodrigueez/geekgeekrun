@@ -203,6 +203,15 @@ export default function initIpc() {
       bossConfig.maxRecommendJobFilterCombinations =
         payload.maxRecommendJobFilterCombinations
     }
+    if (hasOwn(payload, 'jobMatchEnabled')) {
+      bossConfig.jobMatchEnabled = payload.jobMatchEnabled
+    }
+    if (hasOwn(payload, 'jobMatchMinScore')) {
+      bossConfig.jobMatchMinScore = payload.jobMatchMinScore
+    }
+    if (hasOwn(payload, 'jobMatchWeights')) {
+      bossConfig.jobMatchWeights = payload.jobMatchWeights
+    }
     if (hasOwn(payload, 'jobSourceList')) {
       bossConfig.jobSourceList = payload.jobSourceList
     }

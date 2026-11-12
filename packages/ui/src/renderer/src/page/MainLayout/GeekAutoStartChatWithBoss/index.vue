@@ -235,6 +235,99 @@
               </div>
             </el-form-item>
           </el-card>
+          <el-card class="config-section">
+            <el-form-item mb0>
+              <div font-size-16px>职位匹配评分</div>
+            </el-form-item>
+            <div font-size-12px mb8px>
+              使用简历、职位标题、技能、薪资、经验和招聘者活跃度给职位打分，优先处理高分职位。
+              没有填写简历时不会改变原有顺序。
+            </div>
+            <el-checkbox v-model="formContent.jobMatchEnabled">启用职位匹配评分</el-checkbox>
+            <div v-if="formContent.jobMatchEnabled" mt10px>
+              <span>最低投递分数</span>
+              <el-input-number
+                v-model="formContent.jobMatchMinScore"
+                ml8px
+                :min="0"
+                :max="100"
+                :step="5"
+                step-strictly
+                :precision="0"
+                controls-position="right"
+              />
+              <span ml8px font-size-12px color-gray>0 表示不因低分跳过</span>
+              <div
+                mt10px
+                :style="{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                  gap: '8px 12px'
+                }"
+              >
+                <label>
+                  <span font-size-12px>标题权重</span>
+                  <el-input-number
+                    v-model="formContent.jobMatchWeights.title"
+                    w-full
+                    :min="0"
+                    :max="100"
+                    controls-position="right"
+                  />
+                </label>
+                <label>
+                  <span font-size-12px>技能权重</span>
+                  <el-input-number
+                    v-model="formContent.jobMatchWeights.skills"
+                    w-full
+                    :min="0"
+                    :max="100"
+                    controls-position="right"
+                  />
+                </label>
+                <label>
+                  <span font-size-12px>薪资权重</span>
+                  <el-input-number
+                    v-model="formContent.jobMatchWeights.salary"
+                    w-full
+                    :min="0"
+                    :max="100"
+                    controls-position="right"
+                  />
+                </label>
+                <label>
+                  <span font-size-12px>经验权重</span>
+                  <el-input-number
+                    v-model="formContent.jobMatchWeights.experience"
+                    w-full
+                    :min="0"
+                    :max="100"
+                    controls-position="right"
+                  />
+                </label>
+                <label>
+                  <span font-size-12px>公司权重</span>
+                  <el-input-number
+                    v-model="formContent.jobMatchWeights.company"
+                    w-full
+                    :min="0"
+                    :max="100"
+                    controls-position="right"
+                  />
+                </label>
+                <label>
+                  <span font-size-12px>活跃度权重</span>
+                  <el-input-number
+                    v-model="formContent.jobMatchWeights.activity"
+                    w-full
+                    :min="0"
+                    :max="100"
+                    controls-position="right"
+                  />
+                </label>
+              </div>
+            </div>
+          </el-card>
           <!-- <el-form-item
           label="钉钉机器人 AccessToken（用于记录开聊，请勿使用公司内部群）"
           prop="dingtalkRobotAccessToken"
@@ -1808,6 +1901,16 @@ const formContent = ref({
 
   isSkipEmptyConditionForCombineRecommendJobFilter: true,
   maxRecommendJobFilterCombinations: 500,
+  jobMatchEnabled: true,
+  jobMatchMinScore: 0,
+  jobMatchWeights: {
+    title: 25,
+    skills: 35,
+    salary: 15,
+    experience: 10,
+    company: 10,
+    activity: 5
+  },
   __jobSourceList: formatJobSourceConfigToFormValue([
     {
       type: 'expect',
@@ -1963,6 +2066,17 @@ electron.ipcRenderer.invoke('fetch-config-file-content').then((res) => {
     res.config['boss.json'].jobDetailRegExpMatchLogic ?? JobDetailRegExpMatchLogic.EVERY
   formContent.value.isSkipEmptyConditionForCombineRecommendJobFilter =
     res.config['boss.json'].isSkipEmptyConditionForCombineRecommendJobFilter ?? false
+  formContent.value.jobMatchEnabled = res.config['boss.json'].jobMatchEnabled ?? true
+  formContent.value.jobMatchMinScore = Number(res.config['boss.json'].jobMatchMinScore) || 0
+  formContent.value.jobMatchWeights = {
+    title: 25,
+    skills: 35,
+    salary: 15,
+    experience: 10,
+    company: 10,
+    activity: 5,
+    ...(res.config['boss.json'].jobMatchWeights ?? {})
+  }
   formContent.value.__jobSourceList = formatJobSourceConfigToFormValue(
     res.config['boss.json'].jobSourceList || []
   )
