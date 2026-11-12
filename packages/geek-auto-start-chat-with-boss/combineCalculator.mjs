@@ -58,17 +58,49 @@ function combineWithZero(arr, min, max) {
   return combineResult;
 }
 
-export function* combineFiltersWithConstraintsGenerator(selectedFilters) {
+function sortCombinationsBySpecificity(combinations) {
+  return combinations.slice().sort((a, b) => {
+    if (a.length !== b.length) {
+      return b.length - a.length
+    }
+    return JSON.stringify(a).localeCompare(JSON.stringify(b))
+  })
+}
+
+export function getFilterConditionKey(condition) {
+  const normalized = {}
+  for (const key of Object.keys(condition ?? {}).sort()) {
+    const value = condition[key]
+    normalized[key] = Array.isArray(value) ? [...value].sort() : value
+  }
+  return JSON.stringify(normalized)
+}
+
+export function isFilterConditionEmpty(condition) {
+  return Object.keys(condition ?? {}).every((key) => !condition[key]?.length)
+}
+
+export function* combineFiltersWithConstraintsGenerator(
+  selectedFilters,
+  {
+    includeEmptyCondition = true,
+    maxCombinations = Number.POSITIVE_INFINITY
+  } = {}
+) {
   const { cityList, salaryList, experienceList, degreeList, scaleList, industryList } =
-    selectedFilters;
+    selectedFilters ?? {};
 
   // 生成符合限制条件的组合
-  const cityComb = combineWithZero(cityList, 0, 1) // Salary: 0-1 个
-  const salaryComb = combineWithZero(salaryList, 0, 1) // Salary: 0-1 个
-  const experienceComb = combineWithZero(experienceList, 0, experienceList.length) // Experience: 0 个或更多
-  const degreeComb = combineWithZero(degreeList, 0, degreeList.length) // Degree: 0 个或更多
-  const scaleComb = combineWithZero(scaleList, 0, scaleList.length) // Scale: 0 个或更多
-  const industryComb = combineWithZero(industryList, 0, 3) // Industry: 0-3 个
+  const cityComb = sortCombinationsBySpecificity(combineWithZero(cityList, 0, 1)) // City: 0-1 个
+  const salaryComb = sortCombinationsBySpecificity(combineWithZero(salaryList, 0, 1)) // Salary: 0-1 个
+  const experienceComb = sortCombinationsBySpecificity(combineWithZero(experienceList, 0, experienceList.length)) // Experience: 0 个或更多
+  const degreeComb = sortCombinationsBySpecificity(combineWithZero(degreeList, 0, degreeList.length)) // Degree: 0 个或更多
+  const scaleComb = sortCombinationsBySpecificity(combineWithZero(scaleList, 0, scaleList.length)) // Scale: 0 个或更多
+  const industryComb = sortCombinationsBySpecificity(combineWithZero(industryList, 0, 3)) // Industry: 0-3 个
+  const limit = Number.isFinite(Number(maxCombinations))
+    ? Math.max(0, Math.floor(Number(maxCombinations)))
+    : Number.POSITIVE_INFINITY
+  let emittedCount = 0
 
   // 通过迭代生成所有组合
   for (const city of cityComb) {
@@ -77,7 +109,7 @@ export function* combineFiltersWithConstraintsGenerator(selectedFilters) {
         for (const degree of degreeComb) {
           for (const scale of scaleComb) {
             for (const industry of industryComb) {
-              yield {
+              const condition = {
                 cityList: city,
                 salaryList: salary,
                 experienceList: experience,
@@ -85,6 +117,14 @@ export function* combineFiltersWithConstraintsGenerator(selectedFilters) {
                 scaleList: scale,
                 industryList: industry
               }
+              if (!includeEmptyCondition && isFilterConditionEmpty(condition)) {
+                continue
+              }
+              if (emittedCount >= limit) {
+                return
+              }
+              emittedCount++
+              yield condition
             }
           }
         }

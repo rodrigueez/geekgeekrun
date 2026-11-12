@@ -119,6 +119,34 @@ if (
   }
 }
 
+if (
+  fs.existsSync(path.join(configFolderPath, 'boss.json'))
+) {
+  let bossConfig = null
+  try {
+    bossConfig = JSON.parse(
+      fs.readFileSync(path.join(configFolderPath, 'boss.json'))
+    )
+  }
+  catch {}
+  if (
+    bossConfig &&
+    !Object.hasOwn(bossConfig, 'maxRecommendJobFilterCombinations')
+  ) {
+    const hasFilterConditions = Object.values(
+      bossConfig.anyCombineRecommendJobFilter ?? {}
+    ).some(value => Array.isArray(value) && value.length > 0)
+    if (
+      hasFilterConditions &&
+      bossConfig.isSkipEmptyConditionForCombineRecommendJobFilter === false
+    ) {
+      bossConfig.isSkipEmptyConditionForCombineRecommendJobFilter = true
+    }
+    bossConfig.maxRecommendJobFilterCombinations = 500
+    writeConfigFile('boss.json', bossConfig, { isSync: true })
+  }
+}
+
 const ensureRuntimeFolderPathExist = () => {
   if (!fs.existsSync(runtimeFolderPath)) {
     fs.mkdirSync(runtimeFolderPath)

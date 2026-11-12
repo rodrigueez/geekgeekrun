@@ -13,11 +13,13 @@ import { setDomainLocalStorage } from '@geekgeekrun/utils/puppeteer/local-storag
 
 import { readConfigFile, writeStorageFile, ensureConfigFileExist, readStorageFile, ensureStorageFileExist } from './runtime-file-utils.mjs'
 import {
-  calculateTotalCombinations,
   combineFiltersWithConstraintsGenerator,
   checkAnyCombineBossRecommendFilterHasCondition,
   formatStaticCombineFilters,
+  getFilterConditionKey,
+  isFilterConditionEmpty,
 } from './combineCalculator.mjs'
+import { getJobListSkipReason } from './job-list-prefilter.mjs'
 import { default as jobFilterConditions } from './internal-config/job-filter-conditions-20241002.json'
 import { default as rawIndustryFilterExemption } from './internal-config/job-filter-industry-filter-exemption-20241002.json'
 import { ChatStartupFrom } from '@geekgeekrun/sqlite-plugin/dist/entity/ChatStartupLog'
@@ -127,9 +129,19 @@ const combineRecommendJobFilterType = readConfigFile('boss.json').combineRecomme
 const anyCombineRecommendJobFilter = readConfigFile('boss.json').anyCombineRecommendJobFilter
 const staticCombineRecommendJobFilterConditions = readConfigFile('boss.json').staticCombineRecommendJobFilterConditions ?? []
 let isSkipEmptyConditionForCombineRecommendJobFilter = readConfigFile('boss.json').isSkipEmptyConditionForCombineRecommendJobFilter
+const maxRecommendJobFilterCombinations = (() => {
+  const value = Number(readConfigFile('boss.json').maxRecommendJobFilterCombinations)
+  if (!Number.isFinite(value) || value < 1) {
+    return 500
+  }
+  return Math.floor(Math.min(value, 5000))
+})()
 if (!checkAnyCombineBossRecommendFilterHasCondition(anyCombineRecommendJobFilter)) {
   isSkipEmptyConditionForCombineRecommendJobFilter = false
 }
+const hasAnyCombineRecommendJobFilter = checkAnyCombineBossRecommendFilterHasCondition(
+  anyCombineRecommendJobFilter
+)
 const expectJobRegExpStr = readConfigFile('boss.json').expectJobRegExpStr
 const jobNotMatchStrategy = readConfigFile('boss.json').jobNotMatchStrategy ?? MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS
 
@@ -313,6 +325,32 @@ let page
 const blockBossNotNewChat = new Set()
 const blockBossNotActive = new Set()
 const blockJobNotSuit = new Set()
+const blockJobNotHiring = new Set()
+
+function checkIfSalarySuit(salaryDesc) {
+  const salaryData = parseSalary(salaryDesc)
+  if (expectSalaryCalculateWay === SalaryCalculateWay.MONTH_SALARY) {
+    let ourSalaryInterval = [expectSalaryLow ?? null, expectSalaryHigh ?? null]
+    if (ourSalaryInterval.every(it => !isNaN(parseFloat(it)))) {
+      ourSalaryInterval = ourSalaryInterval.sort((a, b) => a - b)
+    }
+    const theirSalaryInterval = [salaryData.low ?? null, salaryData.high ?? null]
+    return hasIntersection(theirSalaryInterval, ourSalaryInterval)
+  }
+  else if (expectSalaryCalculateWay === SalaryCalculateWay.ANNUAL_PACKAGE) {
+    const salaryDataMonth = salaryData.month || 12
+    let ourSalaryInterval = [expectSalaryLow ?? null, expectSalaryHigh ?? null]
+    if (ourSalaryInterval.every(it => !isNaN(parseFloat(it)))) {
+      ourSalaryInterval = ourSalaryInterval.sort((a, b) => a - b)
+    }
+    const theirSalaryInterval = [salaryData.low ?? null, salaryData.high ?? null].map(
+      it =>
+        it === null ? null : (it * salaryDataMonth / 10)
+    )
+    return hasIntersection(theirSalaryInterval, ourSalaryInterval)
+  }
+  return true
+}
 
 async function markJobAsNotSuitInRecommendPage (reasonCode) {
   /**
@@ -798,6 +836,7 @@ async function toRecommendPage (hooks) {
   }
 
   let currentSourceIndex = 0
+  let lastFilterConditionKey = null
   afterPageLoad: while (true) {
     // check set security question tip modal
     let setSecurityQuestionTipModelProxy
@@ -822,7 +861,13 @@ async function toRecommendPage (hooks) {
     const filterConditions =
       combineRecommendJobFilterType === CombineRecommendJobFilterType.STATIC_COMBINE
         ? formatStaticCombineFilters(staticCombineRecommendJobFilterConditions)
-          : combineFiltersWithConstraintsGenerator(anyCombineRecommendJobFilter)
+            .slice(0, maxRecommendJobFilterCombinations)
+          : combineFiltersWithConstraintsGenerator(anyCombineRecommendJobFilter, {
+              includeEmptyCondition:
+                !hasAnyCombineRecommendJobFilter ||
+                !isSkipEmptyConditionForCombineRecommendJobFilter,
+              maxCombinations: maxRecommendJobFilterCombinations
+            })
     let expectJobList
     let filterConditionIndex = -1
     iterateFilterCondition: for (
@@ -831,7 +876,7 @@ async function toRecommendPage (hooks) {
       filterConditionIndex++
       console.log(`current filter condition index to apply: ${filterConditionIndex}`, JSON.stringify(filterCondition))
       findInCurrentFilterCondition: while(true) {
-        await sleepWithRandomDelay(2500)
+        await sleepWithRandomDelay(500)
 
         await Promise.all([
           Promise.race([
@@ -843,8 +888,7 @@ async function toRecommendPage (hooks) {
             page.waitForSelector(".recommend-result-job .job-empty-wrapper")
           ])
         ])
-        // await page.click(USER_SET_EXPECT_JOB_ENTRIES_SELECTOR)
-        await sleep(3000)
+        await sleep(300)
         let onPageCurrentSourceIndex = -1
         for (let i=0; i < computedSourceList.length; i++) {
           const computedSource = computedSourceList[i]
@@ -862,10 +906,9 @@ async function toRecommendPage (hooks) {
             combineRecommendJobFilterType === CombineRecommendJobFilterType.ANY_COMBINE &&
             isSkipEmptyConditionForCombineRecommendJobFilter &&
             Object.keys(filterCondition).length &&
-            Object.keys(filterCondition).every(k => !filterCondition[k]?.length)
+            isFilterConditionEmpty(filterCondition)
           )
         ) {
-          sleep(4000)
           continue iterateFilterCondition
         }
         expectJobList = await page.evaluate(`document.querySelector('.c-expect-select')?.__vue__?.expectList`)
@@ -885,51 +928,60 @@ async function toRecommendPage (hooks) {
             }
           );
           await storeStorage(page).catch(() => void 0)
-          await sleepWithRandomDelay(2000)
+          lastFilterConditionKey = null
+          await sleepWithRandomDelay(600)
           await waitForSageTimeOrJustContinue({
             tag: 'afterJobSourceChosen',
             hooks
           })
         }
-        await sleepWithRandomDelay(1500)
-        await setFilterCondition(filterCondition)
-        await sleep(1500) // TODO: accurately check if job list request sent and response received after set condition
+        const filterConditionKey = getFilterConditionKey(filterCondition)
+        if (filterConditionKey !== lastFilterConditionKey) {
+          await sleepWithRandomDelay(300)
+          await setFilterCondition(filterCondition)
+          lastFilterConditionKey = filterConditionKey
+        }
         await page.waitForFunction(() => {
           return !document.querySelector('.job-recommend-result .job-rec-loading')
-        })
+        }, { timeout: 15 * 1000 }).catch(() => void 0)
+        await sleepWithRandomDelay(200)
         try {
           const { targetJobIndex, targetJobData } = await new Promise(async (resolve, reject) => {
+            let reqHandler = null
+            let resHandler = null
             try {
               let requestNextPagePromiseWithResolver = null
-              page.on(
-                'request',
-                function reqHandler (request) {
+              reqHandler = function (request) {
                   if (
                     request.url().startsWith('https://www.zhipin.com/wapi/zpgeek/pc/recommend/job/list.json') ||
                     request.url().startsWith('https://www.zhipin.com/wapi/zpgeek/search/joblist.json')
                   ) {
                     requestNextPagePromiseWithResolver = (() => {
                       const o = {}
-                      o.promise = new Promise((resolve, reject) => {
+                      o.promise = new Promise((resolve) => {
                         o.resolve = resolve
-                        o.reject = reject
                       })
+                      o.timeout = setTimeout(() => {
+                        o.resolve()
+                      }, 15 * 1000)
                       return o
                     })()
+                    const resolver = requestNextPagePromiseWithResolver
                     page.off(reqHandler)
+                    reqHandler = null
 
-                    page.on(
-                      'response',
-                      function resHandler (response) {
-                        if (response.request() === request) {
-                          requestNextPagePromiseWithResolver?.resolve()
-                          page.off(resHandler)
-                        }
+                    resHandler = function (response) {
+                      if (response.request() === request) {
+                        clearTimeout(resolver.timeout)
+                        resolver.resolve()
+                        page.off(resHandler)
+                        resHandler = null
                       }
-                    )
+                    }
+                    page.on('response', resHandler)
                   }
                 }
-              )
+              page.on('request', reqHandler)
               // job list
               let  recommendJobListElProxy
               try {
@@ -944,39 +996,37 @@ async function toRecommendPage (hooks) {
               let jobListData = []
               async function updateJobListData () {
                 jobListData = await page.evaluate(`document.querySelector('.page-jobs-main')?.__vue__?.jobList`)
-                // due to city can get from list immediately
-                // so just set those job which city is not suit to blockJobNotSuit
-                // to skip view detail
-
-                // skip invalid salaryData (兼职、日结、实习 etc)
-                jobListData.forEach(it => {
-                  const salaryData = parseSalary(it.salaryDesc)
-                  if (!salaryData.high || !salaryData.low) {
-                    blockJobNotSuit.add(it.encryptJobId)
+                const skipReasonCount = {}
+                for (const it of jobListData) {
+                  const skipReason = getJobListSkipReason(it, {
+                    expectCityList,
+                    expectWorkExpList,
+                    expectCityNotMatchStrategy,
+                    expectWorkExpNotMatchStrategy,
+                    isSalaryFilterEnabled,
+                    expectSalaryNotMatchStrategy,
+                    blockCompanyNameRegExp,
+                    blockCompanyNameRegMatchStrategy,
+                    companyAllowList: Array.from(expectCompanySet),
+                    isNoOpStrategy: strategy => strategy === MarkAsNotSuitOp.NO_OP,
+                    blockJobNotSuit,
+                    blockBossNotActive,
+                    blockBossNotNewChat,
+                    blockJobNotHiring,
+                    isSalaryParseable: job => {
+                      const salaryData = parseSalary(job.salaryDesc)
+                      return Boolean(salaryData.high && salaryData.low)
+                    },
+                    isSalarySuit: job => checkIfSalarySuit(job.salaryDesc)
+                  })
+                  if (!skipReason) {
+                    continue
                   }
-                })
-                if (
-                  (
-                    expectCityNotMatchStrategy === MarkAsNotSuitOp.NO_OP && 
-                    Array.isArray(expectCityList) &&
-                    expectCityList.length
-                  ) ||
-                  (
-                    expectWorkExpNotMatchStrategy === MarkAsNotSuitOp.NO_OP && 
-                    Array.isArray(expectWorkExpList) &&
-                    expectWorkExpList.length
-                  ) ||
-                  (
-                    strategyScopeOptionWhenMarkSalaryNotMatch === MarkAsNotSuitOp.NO_OP &&
-                    isSalaryFilterEnabled
-                  )
-                ) {
-                  console.log(`add job city not suit into blockJobNotSuit set`)
-                  for (const it of jobListData) {
-                    if (!expectCityList.includes(it.cityName)) {
-                      blockJobNotSuit.add(it.encryptJobId)
-                    }
-                  }
+                  blockJobNotSuit.add(it.encryptJobId)
+                  skipReasonCount[skipReason] = (skipReasonCount[skipReason] ?? 0) + 1
+                }
+                if (Object.keys(skipReasonCount).length) {
+                  console.log('job list prefilter skipped:', skipReasonCount)
                 }
               }
               await updateJobListData()
@@ -984,35 +1034,12 @@ async function toRecommendPage (hooks) {
               let hasReachLastPage = false
               let targetJobIndex = -1
               let targetJobData, selectedJobData // they show be same; one is from list, another is from detail
-              function checkIfSalarySuit(salaryDesc) {
-                const salaryData = parseSalary(salaryDesc)
-                if (expectSalaryCalculateWay === SalaryCalculateWay.MONTH_SALARY) {
-                  let ourSalaryInterval = [expectSalaryLow ?? null, expectSalaryHigh ?? null]
-                  if (ourSalaryInterval.every(it => !isNaN(parseFloat(it)))) {
-                    ourSalaryInterval = ourSalaryInterval.sort((a, b) => a - b)
-                  }
-                  const theirSalaryInterval = [salaryData.low ?? null, salaryData.high ?? null]
-                  return hasIntersection(theirSalaryInterval, ourSalaryInterval)
-                }
-                else if (expectSalaryCalculateWay === SalaryCalculateWay.ANNUAL_PACKAGE) {
-                  const salaryDataMonth = salaryData.month || 12
-                  let ourSalaryInterval = [expectSalaryLow ?? null, expectSalaryHigh ?? null]
-                  if (ourSalaryInterval.every(it => !isNaN(parseFloat(it)))) {
-                    ourSalaryInterval = ourSalaryInterval.sort((a, b) => a - b)
-                  }
-                  const theirSalaryInterval = [salaryData.low ?? null, salaryData.high ?? null].map(
-                    it =>
-                      it === null ? null : (it * salaryDataMonth / 10)
-                  )
-                  return hasIntersection(theirSalaryInterval, ourSalaryInterval)
-                }
-                return true
-              }
               function getTempTargetJobIndexToCheckDetail () {
                 return jobListData.findIndex(it => {
                   return !blockBossNotNewChat.has(it.encryptBossId) &&
                     !blockBossNotActive.has(it.encryptBossId) &&
                     !blockJobNotSuit.has(it.encryptJobId) &&
+                    !blockJobNotHiring.has(it.encryptJobId) &&
                     (
                       (
                         enableCompanyAllowList ?
@@ -1099,7 +1126,10 @@ async function toRecommendPage (hooks) {
                     tag: 'afterJobListPageFetched',
                     hooks
                   })
-                  await sleep(5000)
+                  await page.waitForFunction(() => {
+                    return !document.querySelector('.job-recommend-result .job-rec-loading')
+                  }, { timeout: 15 * 1000 }).catch(() => void 0)
+                  await sleepWithRandomDelay(300)
                   await updateJobListData()
                   tempTargetJobIndexToCheckDetail = getTempTargetJobIndexToCheckDetail()
                 }
@@ -1479,10 +1509,9 @@ async function toRecommendPage (hooks) {
                       name => selectedJobData.brandName?.toLowerCase?.()?.includes(name.toLowerCase())
                     ) ||
                     // check if job has been marked as not suit or not active
-                    [
-                      ...blockJobNotSuit,
-                      ...blockBossNotActive
-                    ].includes(targetJobData.jobInfo.encryptId)
+                    blockJobNotSuit.has(targetJobData.jobInfo.encryptId) ||
+                    blockBossNotActive.has(targetJobData.jobInfo.encryptUserId) ||
+                    blockJobNotHiring.has(targetJobData.jobInfo.encryptId)
                   ) {
                     // just skip
                     continue continueFind
@@ -1511,6 +1540,14 @@ async function toRecommendPage (hooks) {
               )
             } catch(err) {
               reject(err)
+            }
+            finally {
+              if (reqHandler) {
+                page.off('request', reqHandler)
+              }
+              if (resHandler) {
+                page.off('response', resHandler)
+              }
             }
           })
           await waitForSageTimeOrJustContinue({
@@ -1686,6 +1723,7 @@ async function toRecommendPage (hooks) {
         page.waitForNavigation()
       ])
       currentSourceIndex = 0
+      lastFilterConditionKey = null
     } else {
       hooks.noPositionFoundForCurrentJob?.call()
       await sleep((10 + 15 * Math.random()) * 1000)
@@ -1727,9 +1765,13 @@ export async function mainLoop (hooks) {
       jobNotMatchStrategy,
       jobNotActiveStrategy,
       expectCityNotMatchStrategy,
+      expectWorkExpNotMatchStrategy,
+      expectSalaryNotMatchStrategy,
+      blockCompanyNameRegMatchStrategy,
       blockJobNotSuit,
       blockBossNotActive,
-      blockBossNotNewChat
+      blockBossNotNewChat,
+      blockJobNotHiring
     })
     await toRecommendPage(hooks)
     // goto search

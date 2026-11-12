@@ -9,7 +9,8 @@
     "industryList": []
   },
   "staticCombineRecommendJobFilterConditions": [],
-  "isSkipEmptyConditionForCombineRecommendJobFilter": false,
+  "isSkipEmptyConditionForCombineRecommendJobFilter": true,
+  "maxRecommendJobFilterCombinations": 500,
   "expectJobRegExpStr": "",
   "expectJobNameRegExpStr": "",
   "expectJobTypeRegExpStr": "",

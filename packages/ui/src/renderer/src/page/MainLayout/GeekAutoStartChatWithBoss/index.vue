@@ -221,6 +221,10 @@
                   当前组合条件数：{{
                     currentAnyCombineRecommendJobFilterCombinationCount.toLocaleString()
                   }}
+                  <span ml-8px>
+                    单轮最多遍历
+                    {{ formContent.maxRecommendJobFilterCombinations.toLocaleString() }} 条
+                  </span>
                   <span
                     v-if="currentAnyCombineRecommendJobFilterCombinationCount >= 5"
                     class="color-orange"
@@ -1802,7 +1806,8 @@ const formContent = ref({
     StrategyScopeOptionWhenMarkJobNotMatch.ONLY_COMPANY_MATCHED_JOB,
   jobDetailRegExpMatchLogic: JobDetailRegExpMatchLogic.EVERY,
 
-  isSkipEmptyConditionForCombineRecommendJobFilter: false,
+  isSkipEmptyConditionForCombineRecommendJobFilter: true,
+  maxRecommendJobFilterCombinations: 500,
   __jobSourceList: formatJobSourceConfigToFormValue([
     {
       type: 'expect',
