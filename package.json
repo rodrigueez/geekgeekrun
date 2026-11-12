@@ -6,7 +6,8 @@
   "module": "./main/index.mjs",
   "type": "module",
   "scripts": {
-    "start": "node ./packages/run-core-of-geek-auto-start-chat-with-boss/daemon-main.mjs"
+    "start": "node ./packages/run-core-of-geek-auto-start-chat-with-boss/daemon-main.mjs",
+    "test": "node --test tests/*.test.mjs"
   },
   "author": "geekgeekrun",
   "license": "ISC",
