@@ -205,17 +205,30 @@ export const requestNewMessageContent = async (
         {
           baseURL: llmConfig.providerCompleteApiUrl,
           apiKey: llmConfig.providerApiSecret,
-          model: llmConfig.model
+          model: llmConfig.model,
+          headers: llmConfig.headers,
+          apiMode: llmConfig.apiMode,
+          maxOutputTokens: llmConfig.maxOutputTokens,
+          temperature: llmConfig.temperature,
+          reasoningEffort: llmConfig.reasoningEffort,
+          jsonMode: llmConfig.jsonMode
         },
         chatList
       )
-      res = completion?.choices?.[0] ?? null
+      res = completion
       Object.assign(llmRequestRecord, {
-        completionTokens: completion.usage?.completion_tokens ?? null,
-        promptCacheHitTokens: completion.usage?.prompt_cache_hit_tokens ?? null,
-        promptCacheMissTokens: completion.usage?.prompt_cache_miss_tokens ?? null,
-        promptTokens: completion.usage?.prompt_tokens ?? null,
-        totalTokens: completion.usage?.total_tokens ?? null
+        completionTokens: completion.usage?.completionTokens ?? null,
+        reasoningTokens: completion.usage?.reasoningTokens ?? null,
+        promptCacheHitTokens: completion.usage?.cachedTokens ?? null,
+        promptCacheMissTokens:
+          completion.usage?.cachedTokens !== null &&
+          completion.usage?.cachedTokens !== undefined &&
+          completion.usage?.promptTokens !== null &&
+          completion.usage?.promptTokens !== undefined
+            ? completion.usage.promptTokens - completion.usage.cachedTokens
+            : null,
+        promptTokens: completion.usage?.promptTokens ?? null,
+        totalTokens: completion.usage?.totalTokens ?? null
       } as LlmModelUsageRecord)
     } catch (err) {
       console.log('request failed', err)
@@ -237,11 +250,32 @@ export const requestNewMessageContent = async (
   // _index++
   let textToSend
   try {
-    const rawMarkdownText = res?.message?.content
+    const rawMarkdownText = res?.content
+    if (!rawMarkdownText) {
+      const reason =
+        res?.finishReason === 'length'
+          ? '模型输出被截断，请提高“最大输出 tokens”'
+          : '模型没有返回内容'
+      throw new Error(
+        `${reason}${res?.reasoningContent ? `；reasoning: ${res.reasoningContent.slice(0, 200)}` : ''}`
+      )
+    }
     try {
-      textToSend = JSON.parse(
-        rawMarkdownText.replace(/^```json/m, '').replace(/```$/m, '')
-      )?.response
+      const fencedMatch = rawMarkdownText
+        .trim()
+        .match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
+      const jsonText = (fencedMatch?.[1] ?? rawMarkdownText).trim()
+      let parsed
+      try {
+        parsed = JSON.parse(jsonText)
+      } catch {
+        const responseMatch = jsonText.match(/"response"\s*:\s*"([\s\S]*?)"/)
+        if (!responseMatch) {
+          throw new Error('响应不是合法 JSON')
+        }
+        parsed = { response: responseMatch[1] }
+      }
+      textToSend = typeof parsed === 'string' ? parsed : parsed?.response
     } catch (err) {
       gtag('encounter_error_when_parse_llm_text', {
         err,
@@ -256,10 +290,10 @@ export const requestNewMessageContent = async (
         model: llmConfig?.model,
         providerCompleteApiUrl: llmConfig?.providerCompleteApiUrl
       })
-      throw new Error(`empty content. ${err?.message} ${res?.message?.content}`)
+      throw new Error(`empty content. ${res?.content}`)
     }
   } catch (err) {
-    throw new Error(`fail to parse response. ${err?.message} ${res?.message?.content}`)
+    throw new Error(`fail to parse response. ${(err as Error)?.message} ${res?.content ?? ''}`)
   }
   return {
     responseText: textToSend,

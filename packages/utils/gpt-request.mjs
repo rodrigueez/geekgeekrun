@@ -1,26 +1,419 @@
 import OpenAI from "openai";
 
+const DEFAULT_MAX_OUTPUT_TOKENS = 1024;
+const DEFAULT_TIMEOUT_MS = 120_000;
+const MODEL_LIST_TIMEOUT_MS = 15_000;
+const capabilityCache = new Map();
+
+function normalizeBaseURL(baseURL) {
+  return String(baseURL ?? "").trim().replace(/\/+$/, "");
+}
+
+function normalizeHeaders(headers) {
+  if (!headers) {
+    return {};
+  }
+  if (typeof headers === "string") {
+    const text = headers.trim();
+    return text ? normalizeHeaders(JSON.parse(text)) : {};
+  }
+  if (typeof headers !== "object" || Array.isArray(headers)) {
+    throw new Error("自定义请求头必须是 JSON 对象");
+  }
+  return Object.fromEntries(
+    Object.entries(headers)
+      .filter(([, value]) => value !== undefined && value !== null)
+      .map(([key, value]) => [key, String(value)])
+  );
+}
+
+function hasAuthorizationHeader(headers) {
+  return Object.keys(headers).some((key) => key.toLowerCase() === "authorization");
+}
+
+function createClient({ baseURL, apiKey, headers }) {
+  const normalizedHeaders = normalizeHeaders(headers);
+  const normalizedBaseURL = normalizeBaseURL(baseURL);
+  if (!normalizedBaseURL) {
+    throw new Error("Base URL 不能为空");
+  }
+  return new OpenAI({
+    baseURL: normalizedBaseURL,
+    apiKey:
+      String(apiKey ?? "").trim() ||
+      (hasAuthorizationHeader(normalizedHeaders) ? "custom-header" : "local-gateway"),
+    defaultHeaders: normalizedHeaders,
+    timeout: DEFAULT_TIMEOUT_MS,
+    maxRetries: 1
+  });
+}
+
+function isReasoningModel(model) {
+  return /(^|\/)(o[1-9]\d*|gpt-5|gpt-6)/i.test(String(model ?? ""));
+}
+
+function isGpt6Model(model) {
+  return /gpt-6/i.test(String(model ?? ""));
+}
+
+function getEffectiveReasoningEffort(model, reasoningEffort) {
+  if (reasoningEffort === "none" && isGpt6Model(model)) {
+    return "low";
+  }
+  return reasoningEffort;
+}
+
+function isOpenAIEndpoint(baseURL) {
+  try {
+    return new URL(normalizeBaseURL(baseURL)).hostname.endsWith("openai.com");
+  } catch {
+    return false;
+  }
+}
+
+function isDeepSeekEndpoint(baseURL) {
+  try {
+    return new URL(normalizeBaseURL(baseURL)).hostname.endsWith("deepseek.com");
+  } catch {
+    return false;
+  }
+}
+
+function shouldUseMaxCompletionTokens({ baseURL, model }) {
+  return isOpenAIEndpoint(baseURL) || isReasoningModel(model);
+}
+
+function getMaxOutputTokens(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
+function getCapabilityCacheKey({
+  baseURL,
+  model,
+  reasoningEffort,
+  jsonMode,
+  maxOutputTokens,
+  temperature
+}) {
+  return JSON.stringify([
+    normalizeBaseURL(baseURL),
+    String(model ?? ""),
+    reasoningEffort ?? "default",
+    Boolean(jsonMode),
+    getMaxOutputTokens(maxOutputTokens),
+    Number(temperature)
+  ]);
+}
+
+function isUnsupportedParameterError(error) {
+  if (error?.status !== 400) {
+    return false;
+  }
+  return /unsupported|not supported|unknown (parameter|field)|unrecognized|invalid.*(temperature|max_tokens|max_completion_tokens|response_format|reasoning_effort|reasoning|thinking)/i.test(
+    String(error?.message ?? "")
+  );
+}
+
+function normalizeContent(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") {
+          return part;
+        }
+        return part?.text ?? "";
+      })
+      .join("");
+  }
+  return "";
+}
+
+function normalizeChatCompletion(completion) {
+  const choice = completion?.choices?.[0];
+  const usage = completion?.usage ?? {};
+  const promptTokens = usage.prompt_tokens ?? null;
+  const cachedTokens =
+    usage.prompt_tokens_details?.cached_tokens ??
+    usage.prompt_cache_hit_tokens ??
+    null;
+  return {
+    content: normalizeContent(choice?.message?.content),
+    reasoningContent: choice?.message?.reasoning_content ?? null,
+    finishReason: choice?.finish_reason ?? null,
+    usage: {
+      promptTokens,
+      completionTokens: usage.completion_tokens ?? null,
+      totalTokens: usage.total_tokens ?? null,
+      reasoningTokens:
+        usage.completion_tokens_details?.reasoning_tokens ??
+        usage.reasoning_tokens ??
+        null,
+      cachedTokens
+    },
+    raw: completion
+  };
+}
+
+function getResponsesOutputText(response) {
+  if (typeof response?.output_text === "string") {
+    return response.output_text;
+  }
+  return (response?.output ?? [])
+    .flatMap((item) => item?.content ?? [])
+    .filter((part) => part?.type === "output_text")
+    .map((part) => part?.text ?? "")
+    .join("");
+}
+
+function normalizeResponsesCompletion(response) {
+  const usage = response?.usage ?? {};
+  return {
+    content: getResponsesOutputText(response),
+    reasoningContent: null,
+    finishReason:
+      response?.status === "incomplete" &&
+      response?.incomplete_details?.reason === "max_output_tokens"
+        ? "length"
+        : "stop",
+    usage: {
+      promptTokens: usage.input_tokens ?? null,
+      completionTokens: usage.output_tokens ?? null,
+      totalTokens: usage.total_tokens ?? null,
+      reasoningTokens: usage.output_tokens_details?.reasoning_tokens ?? null,
+      cachedTokens: usage.input_tokens_details?.cached_tokens ?? null
+    },
+    raw: response
+  };
+}
+
+function buildTokenLimitParams({ baseURL, model, maxOutputTokens }) {
+  const maxOutputTokensValue = getMaxOutputTokens(maxOutputTokens);
+  const key = shouldUseMaxCompletionTokens({ baseURL, model })
+    ? "max_completion_tokens"
+    : "max_tokens";
+  return { [key]: maxOutputTokensValue };
+}
+
+function buildChatParams({
+  baseURL,
+  model,
+  messages,
+  maxOutputTokens,
+  temperature,
+  reasoningEffort,
+  jsonMode
+}) {
+  const params = {
+    model,
+    messages,
+    ...buildTokenLimitParams({ baseURL, model, maxOutputTokens })
+  };
+  if (Number.isFinite(Number(temperature)) && !isReasoningModel(model)) {
+    params.temperature = Number(temperature);
+  }
+  if (isDeepSeekEndpoint(baseURL)) {
+    if (reasoningEffort === "none") {
+      params.thinking = { type: "disabled" };
+    } else if (reasoningEffort && reasoningEffort !== "default") {
+      params.thinking = { type: "enabled" };
+      params.reasoning_effort = reasoningEffort;
+    }
+  } else if (
+    reasoningEffort &&
+    reasoningEffort !== "default" &&
+    isReasoningModel(model)
+  ) {
+    params.reasoning_effort = getEffectiveReasoningEffort(model, reasoningEffort);
+  }
+  if (jsonMode) {
+    params.response_format = { type: "json_object" };
+  }
+  return params;
+}
+
+async function sendChatCompletion(client, params) {
+  if (Object.hasOwn(params, "thinking")) {
+    return await client.post("/chat/completions", { body: params });
+  }
+  return await client.chat.completions.create(params);
+}
+
+async function requestChatCompletion(client, options) {
+  const cacheKey = getCapabilityCacheKey(options);
+  const cached = capabilityCache.get(cacheKey);
+  if (cached?.minimal) {
+    return await sendChatCompletion(client, {
+      model: options.model,
+      messages: options.messages,
+      [cached.tokenParam]: getMaxOutputTokens(options.maxOutputTokens)
+    });
+  }
+
+  try {
+    return await sendChatCompletion(client, buildChatParams(options));
+  } catch (error) {
+    if (!isUnsupportedParameterError(error)) {
+      throw error;
+    }
+    const message = String(error?.message ?? "");
+    const initialTokenParam = shouldUseMaxCompletionTokens(options)
+      ? "max_completion_tokens"
+      : "max_tokens";
+    const tokenParam = /max_completion_tokens/i.test(message)
+      ? "max_tokens"
+      : /max_tokens/i.test(message)
+        ? "max_completion_tokens"
+        : initialTokenParam;
+    const completion = await sendChatCompletion(client, {
+      model: options.model,
+      messages: options.messages,
+      [tokenParam]: getMaxOutputTokens(options.maxOutputTokens)
+    });
+    capabilityCache.set(cacheKey, { minimal: true, tokenParam });
+    return completion;
+  }
+}
+
+function buildResponsesParams({
+  baseURL,
+  model,
+  messages,
+  maxOutputTokens,
+  reasoningEffort,
+  jsonMode
+}) {
+  const systemMessages = messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n");
+  const input = messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role,
+      content: message.content
+    }));
+  const params = {
+    model,
+    input,
+    max_output_tokens: getMaxOutputTokens(maxOutputTokens)
+  };
+  if (systemMessages) {
+    params.instructions = systemMessages;
+  }
+  if (
+    reasoningEffort &&
+    reasoningEffort !== "default" &&
+    (isReasoningModel(model) || isDeepSeekEndpoint(baseURL))
+  ) {
+    params.reasoning = {
+      effort: getEffectiveReasoningEffort(model, reasoningEffort)
+    };
+  }
+  if (jsonMode) {
+    params.text = { format: { type: "json_object" } };
+  }
+  return params;
+}
+
+async function requestResponsesCompletion(client, options) {
+  const params = buildResponsesParams(options);
+  try {
+    return await client.responses.create(params);
+  } catch (error) {
+    if (!isUnsupportedParameterError(error)) {
+      throw error;
+    }
+    const minimalParams = {
+      model: options.model,
+      input: params.input,
+      max_output_tokens: params.max_output_tokens
+    };
+    if (params.instructions) {
+      minimalParams.instructions = params.instructions;
+    }
+    return await client.responses.create(minimalParams);
+  }
+}
+
 export async function completes(
   {
     baseURL,
     apiKey,
-    model
+    model,
+    headers,
+    apiMode = "chat",
+    maxOutputTokens,
+    temperature = 0.1,
+    reasoningEffort = "default",
+    jsonMode = true
   },
   messages
 ) {
-  const openai = new OpenAI({
+  const client = createClient({ baseURL, apiKey, headers });
+  const options = {
     baseURL,
-    apiKey,
-  });
-
-  const completion = await openai.chat.completions.create({
-    messages,
     model,
-    frequency_penalty: 0,
-    max_tokens: 100,
-    temperature: 0.1
-  });
+    messages,
+    maxOutputTokens,
+    temperature,
+    reasoningEffort,
+    jsonMode
+  };
+  if (apiMode === "responses") {
+    return normalizeResponsesCompletion(
+      await requestResponsesCompletion(client, options)
+    );
+  }
+  return normalizeChatCompletion(await requestChatCompletion(client, options));
+}
 
-  console.log(completion.choices[0].message.content);
-  return completion;
+export async function listModels({ baseURL, apiKey, headers }) {
+  const normalizedBaseURL = normalizeBaseURL(baseURL);
+  if (!normalizedBaseURL) {
+    throw new Error("Base URL 不能为空");
+  }
+  const requestHeaders = {
+    Accept: "application/json",
+    ...normalizeHeaders(headers)
+  };
+  const normalizedApiKey = String(apiKey ?? "").trim();
+  if (normalizedApiKey && !hasAuthorizationHeader(requestHeaders)) {
+    requestHeaders.Authorization = `Bearer ${normalizedApiKey}`;
+  }
+  const response = await fetch(`${normalizedBaseURL}/models`, {
+    headers: requestHeaders,
+    signal: AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS)
+  });
+  const bodyText = await response.text();
+  if (!response.ok) {
+    throw new Error(
+      `获取模型列表失败：HTTP ${response.status} ${bodyText.slice(0, 300)}`
+    );
+  }
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    throw new Error("模型列表接口没有返回合法 JSON");
+  }
+  const modelList = Array.isArray(body?.data)
+    ? body.data
+    : Array.isArray(body)
+      ? body
+      : [];
+  return modelList
+    .map((item) => ({
+      id: item?.id ?? item?.model ?? item?.name ?? "",
+      displayName: item?.display_name ?? item?.name ?? null,
+      ownedBy: item?.owned_by ?? null,
+      reasoning: item?.reasoning ?? null,
+      maxOutputTokens: item?.max_output_tokens ?? null
+    }))
+    .filter((item) => item.id);
 }

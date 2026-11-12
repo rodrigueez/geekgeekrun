@@ -7,6 +7,6 @@
   "author": "geekgeekrun",
   "license": "ISC",
   "dependencies": {
-    "openai": "^4.91.1"
+    "openai": "^6.49.0"
   }
 }

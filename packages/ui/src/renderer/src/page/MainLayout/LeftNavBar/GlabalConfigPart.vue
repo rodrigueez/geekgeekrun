@@ -18,23 +18,8 @@
           >
             <template #content>
               <div class="font-size-12px">
-                支持
-                <span
-                  class="pl6px pr6px pt4px pb2px color-white border-rd-full font-size-0.8em"
-                  style="background-color: #3c4efd"
-                  >DeepSeek-V3</span
-                >
-                <span
-                  class="ml4px pl6px pr6px pt4px pb2px color-black border-rd-full font-size-0.8em"
-                  style="background-color: #fff"
-                  >GPT-4o mini</span
-                >
-                <span
-                  class="ml4px pl6px pr6px pt4px pb2px color-white border-rd-full font-size-0.8em"
-                  style="background-color: #462ac4"
-                  >Qwen2.5</span
-                >
-                模型<br />支持多个“服务商-模型”组合按权重搭配使用
+                支持 OpenAI 兼容接口<br />DeepSeek、OpenAI、Magpie、Ollama 等本地网关<br />
+                支持多个“服务商-模型”组合按权重搭配使用
               </div>
             </template>
             <QuestionFilled w-1em h-1em mr10px />

@@ -26,6 +26,11 @@ export class LlmModelUsageRecord {
   @Column({
     nullable: true
   })
+  reasoningTokens?: number;
+
+  @Column({
+    nullable: true
+  })
   promptTokens?: number;
 
   @Column({

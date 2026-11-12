@@ -31,6 +31,7 @@ import {
   getValidTemplate,
   requestNewMessageContent
 } from '../../READ_NO_REPLY_AUTO_REMINDER_MAIN/boss-operation'
+import { listModels } from '@geekgeekrun/utils/gpt-request.mjs'
 import {
   defaultPromptMap,
   writeDefaultAutoRemindPrompt
@@ -428,8 +429,12 @@ export default function initIpc() {
       llmConfigWindow?.close()
     }
     ipcMain.handle('save-llm-config', saveLlmConfigHandler)
+    ipcMain.handle('fetch-llm-model-list', async (_, payload) => {
+      return await listModels(payload)
+    })
     llmConfigWindow?.once('closed', () => {
       ipcMain.removeHandler('save-llm-config')
+      ipcMain.removeHandler('fetch-llm-model-list')
       defer.reject(new Error('cancel'))
     })
     return defer.promise
@@ -496,7 +501,13 @@ export default function initIpc() {
     if (!Array.isArray(llmConfigList) || !llmConfigList?.length) {
       throw new Error('CANNOT_FIND_VALID_CONFIG')
     }
-    if (llmConfigList.some((it) => !/^http(s)?:\/\//.test(it.providerCompleteApiUrl))) {
+    if (
+      llmConfigList.some(
+        (it) =>
+          it.enabled !== false &&
+          (!/^http(s)?:\/\//.test(it.providerCompleteApiUrl) || !it.model?.trim())
+      )
+    ) {
       throw new Error('CANNOT_FIND_VALID_CONFIG')
     }
     if (llmConfigList.length > 1) {

@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { BrowserWindow, dialog, ipcMain, screen, shell } from 'electron'
 import gtag from './gtag'
 import buildInfo from '../../common/build-info.json'
 import os from 'node:os'
@@ -26,8 +26,13 @@ export default function initPublicIpc() {
       if (!win) {
         return
       }
-      win.setMinimumSize(size.width, size.height)
-      win.setSize(size.width, size.height, size.animate)
+      const workAreaHeight = screen.getDisplayMatching(win.getBounds()).workAreaSize.height
+      const targetHeight = Math.max(
+        480,
+        Math.min(size.height, workAreaHeight - 40)
+      )
+      win.setMinimumSize(size.width, targetHeight)
+      win.setSize(size.width, targetHeight, size.animate)
     }
   )
   ipcMain.on('open-external-link', (_, link) => {

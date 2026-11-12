@@ -96,6 +96,8 @@ BOSS不明原因已读不回？简历就是投不出去？
 ### 大语言模型设置
 设置本程序运行过程中可能会使用的大模型，有大语言模型加持，让求职更智能。支持配置多个备用模型，确保生成内容更随机，同时确保当某个模型不可用时也能继续让其他模型继续为你服务
 
+支持 OpenAI 兼容接口，包括 DeepSeek、OpenAI、Ollama、LM Studio、Magpie 等本地网关。本地地址通常形如 `http://127.0.0.1:3425/v1`，API Secret 可以留空；填写 Base URL 后可以点“获取模型”直接读取 `/v1/models`。推理模型可在“高级设置”里选择 API 协议、推理强度、最大输出 tokens 和自定义请求头。
+
 <img width="576" alt="image" src="https://github.com/user-attachments/assets/ef91642f-b0b0-438f-8c66-e650f0de139b" />
 
 
