@@ -49,14 +49,30 @@ export async function launchDaemon() {
     })
 
     return new Promise((resolve, reject) => {
+      let settled = false
+      let timer: ReturnType<typeof setTimeout>
+      const finish = (handler, value) => {
+        if (settled) {
+          return
+        }
+        settled = true
+        clearTimeout(timer)
+        handler(value)
+      }
+      timer = setTimeout(() => {
+        finish(reject, new Error('DAEMON_START_TIMEOUT'))
+      }, 15000)
+      daemonProcess.once('exit', (code, signal) => {
+        finish(reject, new Error(`DAEMON_EXITED:${code ?? signal}`))
+      })
       daemonProcess.stdio[3].on('data', (rawData) => {
         let data
         try {
           data = JSON.parse(rawData.toString())
           if (data.type === 'DAEMON_READY') {
-            resolve(true)
+            finish(resolve, true)
           } else if (data.type === 'DAEMON_FATAL') {
-            reject(new Error(data.error))
+            finish(reject, new Error(data.error))
           }
         } catch (err) {
           console.error('', err)
