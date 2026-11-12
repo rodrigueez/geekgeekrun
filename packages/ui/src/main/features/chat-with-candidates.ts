@@ -161,6 +161,7 @@ export async function chatWithCandidates({
         status: STATUS.CHATTING
       })
       try {
+        const urlBeforeClick = `${DETAIL_URL_PREFIX}${candidate.encryptJobId}.html`
         await page.goto(`${DETAIL_URL_PREFIX}${candidate.encryptJobId}.html`, {
           waitUntil: 'domcontentloaded',
           timeout: 60000
@@ -203,7 +204,8 @@ export async function chatWithCandidates({
           break
         }
 
-        const started = await detectChatStarted(page)
+        const navigatedToChat = /\/web\/geek\/chat/.test(page.url())
+        const started = (await detectChatStarted(page)) ?? (navigatedToChat ? 'url' : null)
         if (!started) {
           await setJobCandidateStatus({
             encryptJobId: candidate.encryptJobId,
