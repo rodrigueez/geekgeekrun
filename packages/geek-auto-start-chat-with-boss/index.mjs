@@ -840,8 +840,16 @@ async function toRecommendPage (hooks) {
   const llmScoreCache = new Map()
   let llmCallCount = 0
 
-  const getCachedLlmMatchScore = (encryptJobId) => {
-    const cached = llmScoreCache.get(encryptJobId)
+  const getLlmScoreCacheKey = (encryptJobId, inputHash) => `${encryptJobId}:${inputHash ?? ''}`
+
+  const getCachedLlmMatchScore = (job) => {
+    const encryptJobId = job?.jobInfo?.encryptId ?? job?.encryptJobId
+    if (!encryptJobId) {
+      return null
+    }
+    const cached = llmScoreCache.get(
+      getLlmScoreCacheKey(encryptJobId, getJobMatchInputHash(job))
+    )
     return cached && !cached.failed ? cached : null
   }
 
@@ -853,8 +861,10 @@ async function toRecommendPage (hooks) {
     if (!encryptJobId) {
       return null
     }
-    if (llmScoreCache.has(encryptJobId)) {
-      return getCachedLlmMatchScore(encryptJobId)
+    const inputHash = getJobMatchInputHash(job)
+    const cacheKey = getLlmScoreCacheKey(encryptJobId, inputHash)
+    if (llmScoreCache.has(cacheKey)) {
+      return getCachedLlmMatchScore(job)
     }
     const cacheContext = {}
     try {
@@ -865,14 +875,17 @@ async function toRecommendPage (hooks) {
           resumeHash,
           modelId: jobMatchLlmModelId,
           scorerType: JobMatchScorerType.LLM,
-          inputHash: getJobMatchInputHash(job)
+          inputHash
         },
         cacheContext
       )
     } catch (err) {
       console.log('read job match score cache failed', err)
     }
-    if (cacheContext.score?.score !== undefined) {
+    if (
+      cacheContext.score?.score !== undefined &&
+      cacheContext.score.inputHash === inputHash
+    ) {
       let reasons = []
       try {
         reasons = cacheContext.score.reasonsJson
@@ -883,7 +896,7 @@ async function toRecommendPage (hooks) {
         score: cacheContext.score.score,
         reasons
       }
-      llmScoreCache.set(encryptJobId, result)
+      llmScoreCache.set(cacheKey, result)
       return result
     }
     if (llmCallCount >= jobMatchLlmMaxCallsPerRun) {
@@ -898,10 +911,10 @@ async function toRecommendPage (hooks) {
         deterministicScore
       })
       if (!result) {
-        llmScoreCache.set(encryptJobId, { failed: true })
+        llmScoreCache.set(cacheKey, { failed: true })
         return null
       }
-      llmScoreCache.set(encryptJobId, result)
+      llmScoreCache.set(cacheKey, result)
       try {
         await hooks.jobMatchScoreCacheSet?.promise?.({
           encryptCurrentUserId: traversalState.encryptUserId,
@@ -911,14 +924,14 @@ async function toRecommendPage (hooks) {
           scorerType: JobMatchScorerType.LLM,
           score: result.score,
           reasons: result.reasons,
-          inputHash: getJobMatchInputHash(job)
+          inputHash
         })
       } catch (err) {
         console.log('save job match score cache failed', err)
       }
       return result
     } catch (err) {
-      llmScoreCache.set(encryptJobId, { failed: true })
+      llmScoreCache.set(cacheKey, { failed: true })
       console.log('request job match llm score failed', err)
       return null
     }
@@ -1554,8 +1567,9 @@ async function toRecommendPage (hooks) {
                       ...getJobMatchOptionsForDetailJob(selectedJobData)
                     }
                   )
-                  const llmDetailResult = getCachedLlmMatchScore(
-                    targetJobData.jobInfo.encryptId
+                  const llmDetailResult = await requestLlmMatchScore(
+                    targetJobData,
+                    detailMatchResult.score
                   )
                   const finalDetailMatchScore = detailMatchResult.isScored
                     ? combineMatchScores(

@@ -4,7 +4,7 @@ const { Entity, Column, PrimaryGeneratedColumn, Index } = typeorm
 
 @Entity()
 @Index(
-  ["encryptCurrentUserId", "encryptJobId", "resumeHash", "modelId", "scorerType"],
+  ["encryptCurrentUserId", "encryptJobId", "resumeHash", "modelId", "scorerType", "inputHash"],
   { unique: true }
 )
 export class JobMatchScore {

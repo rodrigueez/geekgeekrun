@@ -64,6 +64,7 @@ import { AddUserToJobHireStatusRecord1767200000001 } from "./migrations/17672000
 import { AddJobMatchScoreTable1767200000002 } from "./migrations/1767200000002-AddJobMatchScoreTable";
 import { AddJobSemanticFilterRecordTable1767200000003 } from "./migrations/1767200000003-AddJobSemanticFilterRecordTable";
 import { AddJobCandidateTable1767300000000 } from "./migrations/1767300000000-AddJobCandidateTable";
+import { AddJobMatchScoreInputHashToUniqueIndex1767400000000 } from "./migrations/1767400000000-AddJobMatchScoreInputHashToUniqueIndex";
 import chunk from 'lodash/chunk'
 import * as typeorm from 'typeorm'
 
@@ -115,7 +116,8 @@ export function initDb(dbFilePath) {
       AddUserToJobHireStatusRecord1767200000001,
       AddJobMatchScoreTable1767200000002,
       AddJobSemanticFilterRecordTable1767200000003,
-      AddJobCandidateTable1767300000000
+      AddJobCandidateTable1767300000000,
+      AddJobMatchScoreInputHashToUniqueIndex1767400000000
     ],
     migrationsRun: true
   });

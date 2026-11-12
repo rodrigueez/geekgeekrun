@@ -598,14 +598,18 @@ export async function getJobMatchScore(
   }
 ) {
   const repo = ds.getRepository(JobMatchScore)
+  const where: Record<string, unknown> = {
+    encryptCurrentUserId: query.encryptCurrentUserId,
+    encryptJobId: query.encryptJobId,
+    resumeHash: query.resumeHash,
+    modelId: query.modelId,
+    scorerType: query.scorerType
+  }
+  if (query.inputHash !== undefined) {
+    where.inputHash = query.inputHash
+  }
   return repo.findOne({
-    where: {
-      encryptCurrentUserId: query.encryptCurrentUserId,
-      encryptJobId: query.encryptJobId,
-      resumeHash: query.resumeHash,
-      modelId: query.modelId,
-      scorerType: query.scorerType as any
-    }
+    where: where as any
   })
 }
 
@@ -623,14 +627,18 @@ export async function saveJobMatchScore(
   }
 ) {
   const repo = ds.getRepository(JobMatchScore)
+  const where: Record<string, unknown> = {
+    encryptCurrentUserId: payload.encryptCurrentUserId,
+    encryptJobId: payload.encryptJobId,
+    resumeHash: payload.resumeHash,
+    modelId: payload.modelId,
+    scorerType: payload.scorerType
+  }
+  if (payload.inputHash !== undefined) {
+    where.inputHash = payload.inputHash
+  }
   let record = await repo.findOne({
-    where: {
-      encryptCurrentUserId: payload.encryptCurrentUserId,
-      encryptJobId: payload.encryptJobId,
-      resumeHash: payload.resumeHash,
-      modelId: payload.modelId,
-      scorerType: payload.scorerType as any
-    }
+    where: where as any
   })
   if (!record) {
     record = new JobMatchScore()
