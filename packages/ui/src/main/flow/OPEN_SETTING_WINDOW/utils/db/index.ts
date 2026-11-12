@@ -5,25 +5,51 @@ import { PageReq } from '../../../../../common/types/pagination'
 
 let worker: Worker | null = null
 let workerExitCode: number | null = null
+const pendingRequestRejectors = new Set<(err: Error) => void>()
+
+const rejectPendingRequests = (err: Error) => {
+  for (const reject of pendingRequestRejectors) {
+    reject(err)
+  }
+  pendingRequestRejectors.clear()
+}
+
+const markWorkerFailed = (err: Error) => {
+  workerExitCode = -1
+  worker = null
+  rejectPendingRequests(err)
+}
+
 export const initDbWorker = () => {
   if (!worker || typeof workerExitCode === 'number') {
-    worker = createDbWorker()
+    const nextWorker = createDbWorker()
+    worker = nextWorker
     workerExitCode = null
     return new Promise((resolve, reject) => {
-      worker!.once('exit', (exitCode) => {
-        workerExitCode = exitCode
-        worker = null
+      nextWorker.once('error', (error) => {
+        const err = error instanceof Error ? error : new Error(String(error))
+        markWorkerFailed(err)
+        reject(err)
       })
-      worker!.on('message', function handler(data) {
+      nextWorker.once('exit', (exitCode) => {
+        workerExitCode = exitCode
+        if (worker === nextWorker) {
+          worker = null
+        }
+        rejectPendingRequests(new Error(`数据库进程已退出（code ${exitCode}）`))
+      })
+      nextWorker.on('message', function handler(data) {
         if (data.type === 'DB_INIT_SUCCESS') {
-          resolve(worker)
+          resolve(nextWorker)
           // attach more event
-          worker?.off('message', handler)
+          nextWorker.off('message', handler)
         } else if (data.type === 'DB_INIT_FAIL') {
           reject(data.error)
-          worker?.terminate()
-          worker?.off('message', handler)
-          worker = null
+          nextWorker.terminate()
+          nextWorker.off('message', handler)
+          if (worker === nextWorker) {
+            worker = null
+          }
         }
       })
     })
@@ -34,19 +60,33 @@ export const initDbWorker = () => {
 
 const createWorkerPromise = async (data) => {
   await initDbWorker()
+  const targetWorker = worker
+  if (!targetWorker) {
+    throw new Error('数据库进程不可用')
+  }
   const uuid = randomUUID()
-  worker!.postMessage({
+  targetWorker.postMessage({
     _uuid: uuid,
     ...data
   })
-  return new Promise((resolve) => {
-    worker!.on('message', function handler(data) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      targetWorker.off('message', handler)
+      pendingRequestRejectors.delete(rejectRequest)
+    }
+    const rejectRequest = (err: Error) => {
+      cleanup()
+      reject(err)
+    }
+    function handler(data) {
       const { _uuid, ...payload } = data ?? {}
       if (_uuid === uuid) {
+        cleanup()
         resolve(payload)
-        worker?.off('message', handler)
       }
-    })
+    }
+    pendingRequestRejectors.add(rejectRequest)
+    targetWorker.on('message', handler)
   })
 }
 
