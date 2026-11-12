@@ -1,6 +1,5 @@
 import { BrowserWindow, shell } from 'electron'
 import path from 'path'
-import { openDevTools } from '../commands'
 import { daemonEE } from '../flow/OPEN_SETTING_WINDOW/connect-to-daemon'
 export let mainWindow: BrowserWindow | null = null
 
@@ -25,13 +24,7 @@ export function createMainWindow(): BrowserWindow {
   })
 
   mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
-  })
-  mainWindow.on('ready-to-show', async () => {
-    process.env.NODE_ENV === 'development' &&
-      setTimeout(() => {
-        mainWindow && openDevTools(mainWindow)
-      }, 500)
+    mainWindow?.show()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
