@@ -107,6 +107,7 @@ const constantOpenContent = (() => {
 })()
 
 const dbInitPromise = initDb(getPublicDbFilePath())
+const jobHireStatusCache = new Map<string, any>()
 
 export const pageMapByName: {
   boss?: Page | null
@@ -207,7 +208,12 @@ async function checkJobIsClosed() {
     return false
   }
   let isJobClosed = false
-  let record = await getJobHireStatusRecord(await dbInitPromise, encryptJobId)
+  let record = jobHireStatusCache.has(encryptJobId)
+    ? jobHireStatusCache.get(encryptJobId)
+    : await getJobHireStatusRecord(await dbInitPromise, encryptJobId)
+  if (!jobHireStatusCache.has(encryptJobId)) {
+    jobHireStatusCache.set(encryptJobId, record ?? null)
+  }
   // not seen before, or last seen more than 6 hours ago
   // fetch new status
   if (
@@ -222,8 +228,9 @@ async function checkJobIsClosed() {
       return false
     }
     positionNameElHandle.click()
+    let targetPage: Page | null = null
     try {
-      const targetPage = await waitForPage(
+      const openedPage = await waitForPage(
         pageMapByName.boss!.browser(),
         async (page) => {
           const url = page.url()
@@ -241,7 +248,8 @@ async function checkJobIsClosed() {
         },
         { timeout: 15 * 1000 }
       )
-      const htmlContent = await targetPage.content()
+      targetPage = openedPage
+      const htmlContent = await openedPage.content()
       if (htmlContent) {
         const $ = cheerio.load(htmlContent)
         const [jobBannerEl] = $('#main .job-banner') ?? []
@@ -249,7 +257,7 @@ async function checkJobIsClosed() {
           console.log(`access might be blocked`)
           if (
             htmlContent.includes(`您访问的页面不存在`) ||
-            location.href === `https://www.zhipin.com/`
+            openedPage.url() === `https://www.zhipin.com/`
           ) {
             await saveJobHireStatusRecord(await dbInitPromise, {
               encryptJobId,
@@ -277,19 +285,28 @@ async function checkJobIsClosed() {
           }
         }
       }
-      targetPage.close().catch(() => void 0)
     } catch (err) {
       console.log(`checkJobIsClosed error: ${err}`)
     }
+    finally {
+      targetPage?.close().catch(() => void 0)
+    }
     record = await getJobHireStatusRecord(await dbInitPromise, encryptJobId)
+    jobHireStatusCache.set(encryptJobId, record ?? null)
   }
-  if (record.hireStatus !== JobHireStatus.HIRING) {
+  if (record && record.hireStatus !== JobHireStatus.HIRING) {
     isJobClosed = true
   }
   return isJobClosed
 }
 
 let browser: null | Browser = null
+async function closeBrowserIfAny() {
+  const currentBrowser = browser
+  if (currentBrowser) {
+    await currentBrowser.close()
+  }
+}
 const mainLoop = async () => {
   if (browser) {
     try {
@@ -305,7 +322,7 @@ const mainLoop = async () => {
   let cookieCheckResult = checkCookieListFormat(bossCookies)
   while (!cookieCheckResult) {
     try {
-      browser && (await browser.close())
+      await closeBrowserIfAny()
     } catch (err) {
       console.log(`close browser failed`, err)
     }
@@ -358,8 +375,9 @@ const mainLoop = async () => {
     '附件简历还没准备好',
     '设置合适的期望薪资范围'
   ].map((it) => new RegExp(it))
-  browser = await bootstrap()
-  await Promise.all([launchBoss(browser)])
+  const launchedBrowser = await bootstrap()
+  browser = launchedBrowser
+  await Promise.all([launchBoss(launchedBrowser)])
 
   await sleep(1000)
   pageMapByName.boss!.bringToFront()
@@ -609,12 +627,13 @@ const mainLoop = async () => {
       )?.filter(messageForSaveFilter) ?? []
 
     const lastGeekMessageSendTime = historyMessageList.findLast((it) => it.isSelf)?.time ?? 0
+    const lastMessage = historyMessageList[historyMessageList.length - 1]
     const isJobClosed = await checkJobIsClosed()
     if (
       !isJobClosed &&
       isExpectJobTypeMatch &&
-      historyMessageList[historyMessageList.length - 1].isSelf &&
-      historyMessageList[historyMessageList.length - 1].status === MsgStatus.HAS_READ &&
+      lastMessage?.isSelf &&
+      lastMessage.status === MsgStatus.HAS_READ &&
       ((conversationInfo &&
         Object.hasOwn(conversationInfo, 'bothTalked') &&
         !conversationInfo.bothTalked) ||
@@ -721,7 +740,7 @@ export async function runEntry() {
   let puppeteerExecutable = await getLastUsedAndAvailableBrowser()
   if (!puppeteerExecutable) {
     try {
-      await configWithBrowserAssistant({ autoFind: true })
+      await configWithBrowserAssistant({ autoFind: true, windowOption: {} })
     } catch (error) {
       //
     }

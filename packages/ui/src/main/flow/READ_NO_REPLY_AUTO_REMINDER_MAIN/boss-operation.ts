@@ -11,6 +11,7 @@ import { formatResumeJsonToMarkdown } from '../../../common/utils/resume'
 import { SINGLE_ITEM_DEFAULT_SERVE_WEIGHT } from '../../../common/constant'
 import { LlmModelUsageRecord } from '@geekgeekrun/sqlite-plugin/dist/entity/LlmModelUsageRecord'
 import gtag from '../../utils/gtag'
+import { createHash } from 'node:crypto'
 
 export const sendLookForwardReplyEmotion = async (page: Page) => {
   const emotionEntryButtonProxy = await page.$('.chat-conversation .message-controls .btn-emotion')
@@ -173,11 +174,8 @@ export const requestNewMessageContent = async (
         '围绕我简历中关于自我介绍、技术栈、工作经历、项目描述、项目业绩等内容，写一句自我介绍。开头不必包含“您好”、结尾不必包含“期待回复”；务必确保本次所回复的内容不能与之前所回复的内容雷同或相似。请确保仅回复一句话，以JSON响应，不要包含其他解释或内容；数据结构参考：`{"response": "这里是将会发送给招聘者的内容"}`'
     })
   }
-  console.log(chatList)
   let res, llmConfig
-  const llmRequestRecord: Omit<LlmModelUsageRecord, 'id' | 'providerApiSecretMd5'> & {
-    providerApiSecret: string
-  } = {}
+  const llmRequestRecord: Partial<LlmModelUsageRecord> = {}
   const blockModelSet = new Set()
   while (!res) {
     let llmConfigList = await readConfigFile('llm.json')
@@ -190,11 +188,15 @@ export const requestNewMessageContent = async (
     if (!llmConfig) {
       throw new Error(`CANNOT_FIND_A_USABLE_MODEL`)
     }
-    console.log(llmConfig.providerCompleteApiUrl)
     Object.assign(llmRequestRecord, {
       providerCompleteApiUrl: llmConfig.providerCompleteApiUrl,
       model: llmConfig.model,
-      providerApiSecret: llmConfig.providerApiSecret,
+      providerApiSecret: llmConfig.providerApiSecret
+        ? createHash('sha256')
+            .update(String(llmConfig.providerApiSecret))
+            .digest('hex')
+            .slice(0, 16)
+        : '',
       requestStartTime: new Date(),
       hasError: false,
       errorMessage: '',
@@ -235,7 +237,7 @@ export const requestNewMessageContent = async (
       blockModelSet.add(llmConfig.id)
       Object.assign(llmRequestRecord, {
         hasError: true,
-        errorMessage: err?.message ?? ''
+        errorMessage: err instanceof Error ? err.message : String(err)
       })
     } finally {
       llmRequestRecord.requestEndTime = new Date()
@@ -246,7 +248,6 @@ export const requestNewMessageContent = async (
       }
     }
   }
-  console.log(res)
   // _index++
   let textToSend
   try {
