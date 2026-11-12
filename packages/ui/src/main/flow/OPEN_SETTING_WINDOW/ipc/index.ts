@@ -523,7 +523,12 @@ export default function initIpc() {
   ipcMain.on('close-llm-config', () => llmConfigWindow?.close())
 
   ipcMain.handle('resume-edit', async () => {
-    createResumeEditorWindow({
+    if (resumeEditorWindow) {
+      resumeEditorWindow.show()
+      resumeEditorWindow.focus()
+      return
+    }
+    const resumeWindow = createResumeEditorWindow({
       parent: mainWindow!,
       modal: true,
       show: true
@@ -537,13 +542,14 @@ export default function initIpc() {
           content: resumeContent
         }
       ])
+      await syncActiveJobSearchProfile()
       defer.resolve()
-      resumeEditorWindow?.close()
+      resumeWindow.close()
     }
     ipcMain.handle('save-resume-content', saveResumeHandler)
-    resumeEditorWindow?.once('closed', () => {
+    resumeWindow.once('closed', () => {
       ipcMain.removeHandler('save-resume-content')
-      defer.reject(new Error('cancel'))
+      defer.resolve()
     })
 
     return defer.promise

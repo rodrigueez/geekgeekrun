@@ -8,6 +8,8 @@ export function createResumeEditorWindow(
   // Create the browser window.
   if (resumeEditorWindow) {
     resumeEditorWindow!.show()
+    resumeEditorWindow!.focus()
+    return resumeEditorWindow
   }
   resumeEditorWindow = new BrowserWindow({
     width: 960,
