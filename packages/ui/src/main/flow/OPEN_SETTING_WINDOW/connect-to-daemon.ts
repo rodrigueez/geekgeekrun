@@ -5,9 +5,10 @@ import path from 'node:path'
 import net from 'node:net'
 import split2 from 'split2'
 
-let daemonClient = null
+let daemonClient: net.Socket | null = null
 export const daemonEE = new EventEmitter()
 const waitForCallbackTaskMap = new Map()
+const DEFAULT_CALLBACK_TIMEOUT_MS = 30 * 1000
 
 export function getSocketPath(socketName) {
   const ipcSocketPath =
@@ -19,18 +20,19 @@ export function getSocketPath(socketName) {
 
 // 连接到守护进程
 export async function connectToDaemon() {
-  daemonClient = new net.Socket()
+  const socket = new net.Socket()
+  daemonClient = socket
   let isConnected = false
   await new Promise((resolve, reject) => {
     const ipcSocketName = process.env.GEEKGEEKRUND_PIPE_NAME
     const ipcSocketPath = getSocketPath(ipcSocketName)
-    daemonClient.connect(ipcSocketPath, 'localhost', () => {
+    socket.connect(ipcSocketPath, () => {
       isConnected = true
       console.log('已连接到守护进程')
       daemonEE.emit('connect')
       // 使用 split2 按行分割流式数据，处理 JSONL 格式（每行一个 JSON）
       const splitStream = split2()
-      daemonClient.pipe(splitStream).on('data', (line) => {
+      socket.pipe(splitStream).on('data', (line) => {
         const trimmedLine = line.toString().trim()
         if (!trimmedLine) {
           return // 跳过空行
@@ -57,7 +59,7 @@ export async function connectToDaemon() {
           //     mainWindow.webContents.send('daemon-message', message);
           // }
         } catch (parseError) {
-          console.error('解析守护进程消息失败:', parseError.message)
+          console.error('解析守护进程消息失败:', (parseError as Error).message)
           console.error('原始数据:', trimmedLine.substring(0, 100))
         }
       })
@@ -66,7 +68,7 @@ export async function connectToDaemon() {
         console.error('split2 流处理错误:', err)
       })
 
-      daemonClient.on('close', () => {
+      socket.on('close', () => {
         if (!isConnected) {
           return
         }
@@ -81,13 +83,13 @@ export async function connectToDaemon() {
       // }
     })
 
-    daemonClient.on('close', () => {
+    socket.on('close', () => {
       if (isConnected) {
         return
       }
       reject(new Error('连接到守护进程超时'))
     })
-    daemonClient.on('error', (err) => {
+    socket.on('error', (err) => {
       console.error('守护进程连接错误:', err)
       // daemonEE.emit('error', err)
       reject(err)
@@ -96,7 +98,10 @@ export async function connectToDaemon() {
 }
 
 // 向守护进程发送消息
-export function sendToDaemon(message, { needCallback = false, timeout = undefined } = {}) {
+export function sendToDaemon(
+  message,
+  { needCallback = false, timeout = DEFAULT_CALLBACK_TIMEOUT_MS } = {}
+) {
   const _callbackUuid = randomUUID()
   if (daemonClient && !daemonClient.destroyed) {
     daemonClient.write(
@@ -112,20 +117,28 @@ export function sendToDaemon(message, { needCallback = false, timeout = undefine
         reject = _reject
       })
       waitForCallbackTaskMap.set(_callbackUuid, { resolve, reject })
-      promise.finally(() => waitForCallbackTaskMap.delete(_callbackUuid))
-      let timeoutTimer
-      if (!isNaN(parseInt(timeout))) {
+      let timeoutTimer: NodeJS.Timeout | null = null
+      const cleanup = () => {
+        waitForCallbackTaskMap.delete(_callbackUuid)
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer)
+        }
+      }
+      if (Number.isFinite(Number(timeout))) {
         timeoutTimer = setTimeout(() => {
+          waitForCallbackTaskMap.delete(_callbackUuid)
           reject(new Error(`Callback timeout after ${timeout}ms`))
         }, timeout)
+        timeoutTimer.unref?.()
       }
-      promise.finally(() => {
-        clearTimeout(timeoutTimer)
-      })
+      promise.then(cleanup, cleanup)
       return promise
     }
   } else {
     console.error('守护进程未连接')
+    if (needCallback) {
+      return Promise.reject(new Error('守护进程未连接'))
+    }
   }
   return undefined
 }
@@ -141,5 +154,9 @@ export function sendToDaemon(message, { needCallback = false, timeout = undefine
 // });
 
 export function closeDaemonClient() {
+  for (const { reject } of waitForCallbackTaskMap.values()) {
+    reject(new Error('守护进程连接已关闭'))
+  }
+  waitForCallbackTaskMap.clear()
   daemonClient?.destroy()
 }

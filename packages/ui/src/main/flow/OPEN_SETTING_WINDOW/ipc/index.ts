@@ -60,8 +60,59 @@ import { getLastUsedAndAvailableBrowser } from '../../DOWNLOAD_DEPENDENCIES/util
 import { waitForCommonJobConditionDone } from '../../../features/common-job-condition'
 import { ensureConfigFileExist } from '@geekgeekrun/geek-auto-start-chat-with-boss/runtime-file-utils.mjs'
 
+function waitForWorkerExit(workerId: string, timeout = 30 * 1000) {
+  return new Promise<void>((resolve) => {
+    let timeoutTimer: NodeJS.Timeout | null = null
+    const handler = (message) => {
+      if (message.workerId !== workerId || message.type !== 'worker-exited') {
+        return
+      }
+      cleanup()
+      resolve()
+    }
+    const cleanup = () => {
+      daemonEE.off('message', handler)
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer)
+      }
+    }
+    daemonEE.on('message', handler)
+    timeoutTimer = setTimeout(() => {
+      cleanup()
+      resolve()
+    }, timeout)
+    timeoutTimer.unref?.()
+  })
+}
+
+type Deferred<T> = {
+  promise: Promise<T>
+  resolve: (value: T | PromiseLike<T>) => void
+  reject: (reason?: unknown) => void
+}
+
+function createPromiseWithResolvers<T>(): Deferred<T> {
+  let resolve: (value: T | PromiseLike<T>) => void
+  let reject: (reason?: unknown) => void
+  const promise = new Promise<T>((_resolve, _reject) => {
+    resolve = _resolve
+    reject = _reject
+  })
+  return {
+    promise,
+    resolve: resolve!,
+    reject: reject!
+  }
+}
+
 export default function initIpc() {
-  ipcMain.handle('save-config-file-from-ui', async (ev, payload) => {
+  daemonEE.on('message', (message) => {
+    if (message.type === 'worker-exited') {
+      mainWindow?.webContents.send('worker-exited', message)
+    }
+  })
+
+  ipcMain.handle('save-config-file-from-ui', async (_ev, payload) => {
     payload = JSON.parse(payload)
     ensureConfigFileExist()
 
@@ -148,6 +199,10 @@ export default function initIpc() {
       bossConfig.isSkipEmptyConditionForCombineRecommendJobFilter =
         payload.isSkipEmptyConditionForCombineRecommendJobFilter
     }
+    if (hasOwn(payload, 'maxRecommendJobFilterCombinations')) {
+      bossConfig.maxRecommendJobFilterCombinations =
+        payload.maxRecommendJobFilterCombinations
+    }
     if (hasOwn(payload, 'jobSourceList')) {
       bossConfig.jobSourceList = payload.jobSourceList
     }
@@ -188,47 +243,21 @@ export default function initIpc() {
     return await Promise.all(promiseArr)
   })
 
-  ipcMain.handle('run-geek-auto-start-chat-with-boss', async (ev) => {
+  ipcMain.handle('run-geek-auto-start-chat-with-boss', async (_ev) => {
     const mode = 'geekAutoStartWithBossMain'
     const { runRecordId } = await runCommon({ mode })
-    daemonEE.on('message', function handler(message) {
-      if (message.workerId !== mode) {
-        return
-      }
-      if (message.type === 'worker-exited') {
-        mainWindow?.webContents.send('worker-exited', message)
-      }
-    })
     return { runRecordId }
   })
 
   ipcMain.handle('run-read-no-reply-auto-reminder', async () => {
     const mode = 'readNoReplyAutoReminderMain'
     const { runRecordId } = await runCommon({ mode })
-    daemonEE.on('message', function handler(message) {
-      if (message.workerId !== mode) {
-        return
-      }
-      if (message.type === 'worker-exited') {
-        mainWindow?.webContents.send('worker-exited', message)
-      }
-    })
     return { runRecordId }
   })
 
   ipcMain.handle('stop-geek-auto-start-chat-with-boss', async () => {
     mainWindow?.webContents.send('geek-auto-start-chat-with-boss-stopping')
-    const p = new Promise((resolve) => {
-      daemonEE.on('message', function handler(message) {
-        if (message.workerId !== 'geekAutoStartWithBossMain') {
-          return
-        }
-        if (message.type === 'worker-exited') {
-          daemonEE.off('message', handler)
-          resolve(undefined)
-        }
-      })
-    })
+    const workerExitPromise = waitForWorkerExit('geekAutoStartWithBossMain')
     await sendToDaemon(
       {
         type: 'stop-worker',
@@ -239,23 +268,13 @@ export default function initIpc() {
       }
     )
 
-    await p
+    await workerExitPromise
     mainWindow?.webContents.send('geek-auto-start-chat-with-boss-stopped')
   })
 
   ipcMain.handle('stop-read-no-reply-auto-reminder', async () => {
     mainWindow?.webContents.send('read-no-reply-auto-reminder-stopping')
-    const p = new Promise((resolve) => {
-      daemonEE.on('message', function handler(message) {
-        if (message.workerId !== 'readNoReplyAutoReminderMain') {
-          return
-        }
-        if (message.type === 'worker-exited') {
-          daemonEE.off('message', handler)
-          resolve(undefined)
-        }
-      })
-    })
+    const workerExitPromise = waitForWorkerExit('readNoReplyAutoReminderMain')
     await sendToDaemon(
       {
         type: 'stop-worker',
@@ -266,7 +285,7 @@ export default function initIpc() {
       }
     )
 
-    await p
+    await workerExitPromise
     mainWindow?.webContents.send('read-no-reply-auto-reminder-stopped')
   })
 
@@ -300,28 +319,28 @@ export default function initIpc() {
     return checkCookieListFormat(cookies)
   })
 
-  ipcMain.handle('get-auto-start-chat-record', async (ev, payload: PageReq) => {
+  ipcMain.handle('get-auto-start-chat-record', async (_ev, payload: PageReq) => {
     const a = await getAutoStartChatRecord(payload)
     return a
   })
-  ipcMain.handle('get-mark-as-not-suit-record', async (ev, payload: PageReq) => {
+  ipcMain.handle('get-mark-as-not-suit-record', async (_ev, payload: PageReq) => {
     const a = await getMarkAsNotSuitRecord(payload)
     return a
   })
-  ipcMain.handle('get-job-library', async (ev, payload: PageReq) => {
+  ipcMain.handle('get-job-library', async (_ev, payload: PageReq) => {
     const a = await getJobLibrary(payload)
     return a
   })
-  ipcMain.handle('get-boss-library', async (ev, payload: PageReq) => {
+  ipcMain.handle('get-boss-library', async (_ev, payload: PageReq) => {
     const a = await getBossLibrary(payload)
     return a
   })
-  ipcMain.handle('get-company-library', async (ev, payload: PageReq) => {
+  ipcMain.handle('get-company-library', async (_ev, payload: PageReq) => {
     const a = await getCompanyLibrary(payload)
     return a
   })
 
-  let subProcessOfOpenBossSiteDefer: null | PromiseWithResolvers<ChildProcess> = null
+  let subProcessOfOpenBossSiteDefer: Deferred<ChildProcess> | null = null
   let subProcessOfOpenBossSite: null | ChildProcess = null
   ipcMain.handle('open-site-with-boss-cookie', async (ev, data) => {
     const url = data.url
@@ -330,7 +349,7 @@ export default function initIpc() {
       !subProcessOfOpenBossSite ||
       subProcessOfOpenBossSite.killed
     ) {
-      subProcessOfOpenBossSiteDefer = Promise.withResolvers()
+      subProcessOfOpenBossSiteDefer = createPromiseWithResolvers<ChildProcess>()
       let puppeteerExecutable = await getLastUsedAndAvailableBrowser()
       if (!puppeteerExecutable) {
         try {
@@ -421,7 +440,7 @@ export default function initIpc() {
       modal: true,
       show: true
     })
-    const defer = Promise.withResolvers()
+    const defer = createPromiseWithResolvers<void>()
     async function saveLlmConfigHandler(_, configToSave) {
       await writeConfigFile('llm.json', configToSave)
       defer.resolve()
@@ -447,7 +466,7 @@ export default function initIpc() {
       modal: true,
       show: true
     })
-    const defer = Promise.withResolvers()
+    const defer = createPromiseWithResolvers<void>()
     async function saveResumeHandler(_, resumeContent) {
       await writeConfigFile('resumes.json', [
         {
@@ -565,6 +584,7 @@ export default function initIpc() {
   })
   ipcMain.handle('config-with-browser-assistant', async () => {
     return await configWithBrowserAssistant({
+      autoFind: false,
       windowOption: {
         parent: mainWindow!,
         modal: true,

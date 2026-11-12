@@ -12,16 +12,15 @@ export async function runCommon({ mode }) {
       needCallback: true
     }
   )
-  const taskList = (
-    await sendToDaemon(
-      {
-        type: 'get-status'
-      },
-      {
-        needCallback: true
-      }
-    )
-  )?.workers
+  const daemonStatus = (await sendToDaemon(
+    {
+      type: 'get-status'
+    },
+    {
+      needCallback: true
+    }
+  )) as { workers?: Array<{ workerId: string; args?: string }> } | undefined
+  const taskList = daemonStatus?.workers
   const runningTask = taskList?.find((it) => it.workerId === mode)
   if (runningTask) {
     const commandlineArgs = minimist(runningTask.args ?? [])
@@ -32,7 +31,9 @@ export async function runCommon({ mode }) {
       isAlreadyRunning: true
     }
   }
-  const currentRunRecord = (await saveAndGetCurrentRunRecord())?.data
+  const currentRunRecord = (
+    (await saveAndGetCurrentRunRecord()) as { data?: { id?: number } }
+  )?.data
   const subProcessEnv = {
     ...process.env,
     GEEKGEEKRUND_NO_AUTO_RESTART_EXIT_CODE: [
@@ -57,17 +58,17 @@ export async function runCommon({ mode }) {
       needCallback: true
     }
   )
-  daemonEE.on('message', (message) => {
-    if (message.type === 'worker-exited') {
-      if (
-        message.workerId === mode &&
-        !message.restarting &&
-        globalThis.GEEKGEEKRUN_PROCESS_ROLE !== 'ui'
-      ) {
-        process.exit(0)
+  const workerExitedHandler = (message) => {
+    if (message.workerId === mode && message.type === 'worker-exited') {
+      if (!message.restarting) {
+        daemonEE.off('message', workerExitedHandler)
+        if (globalThis.GEEKGEEKRUN_PROCESS_ROLE !== 'ui') {
+          process.exit(0)
+        }
       }
     }
-  })
+  }
+  daemonEE.on('message', workerExitedHandler)
   return {
     runRecordId: currentRunRecord?.id
   }
