@@ -26,21 +26,51 @@ export const configFolderPath = path.join(
   runtimeFolderPath,
   'config'
 )
+const buildTempFilePath = (filePath) =>
+  `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
+
+const writeFileAtomic = (filePath, fileContent, { isSync } = {}) => {
+  const tempFilePath = buildTempFilePath(filePath)
+  if (isSync) {
+    try {
+      fs.writeFileSync(tempFilePath, fileContent)
+      fs.renameSync(tempFilePath, filePath)
+    } catch (err) {
+      try {
+        fs.existsSync(tempFilePath) && fs.unlinkSync(tempFilePath)
+      } catch {}
+      throw err
+    }
+    return
+  }
+  return fsPromise
+    .writeFile(tempFilePath, fileContent)
+    .then(() => fsPromise.rename(tempFilePath, filePath))
+    .catch(async (err) => {
+      try {
+        await fsPromise.unlink(tempFilePath)
+      } catch {}
+      throw err
+    })
+}
+
+// 解析失败时保留现场，避免把用户的文件直接删掉（resumes.json 没有默认值，删掉就真的丢了）。
+const backupBrokenFile = (filePath) => {
+  const backupPath = `${filePath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}.bak`
+  try {
+    fs.renameSync(filePath, backupPath)
+    console.warn(`配置文件解析失败，已备份到 ${backupPath}`)
+  } catch {
+    try {
+      fs.existsSync(filePath) && fs.unlinkSync(filePath)
+    } catch {}
+  }
+}
+
 export const writeConfigFile = async (fileName, content, { isSync } = {}) => {
   const filePath = path.join(configFolderPath, fileName)
   const fileContent = JSON.stringify(content)
-  if (isSync) {
-    fs.writeFileSync(
-      filePath,
-      fileContent
-    )
-  }
-  else {
-    return fsPromise.writeFile(
-      filePath,
-      fileContent
-    )
-  }
+  return writeFileAtomic(filePath, fileContent, { isSync })
 }
 if (
   !fs.existsSync(
@@ -191,7 +221,7 @@ export const readConfigFile = (fileName) => {
       fs.readFileSync(joinedPath)
     )
   } catch {
-    fs.existsSync(joinedPath) && fs.unlinkSync(joinedPath)
+    fs.existsSync(joinedPath) && backupBrokenFile(joinedPath)
     if (defaultConfigFileContentMap[fileName]) {
       ensureConfigFileExist()
       o = JSON.parse(defaultConfigFileContentMap[fileName])
@@ -250,7 +280,7 @@ export const readStorageFile = (fileName, { isJson } = {}) => {
       o = content.toString()
     }
   } catch {
-    fs.existsSync(joinedPath) && fs.unlinkSync(joinedPath)
+    fs.existsSync(joinedPath) && backupBrokenFile(joinedPath)
     ensureStorageFileExist()
     if (isJson) {
       o = JSON.parse(defaultStorageFileContentMap[fileName] ?? 'null')
@@ -272,10 +302,7 @@ export const writeStorageFile = async (fileName, content, { isJson } = {}) => {
   } else {
     fileContent = content
   }
-  return fsPromise.writeFile(
-    filePath,
-    fileContent
-  )
+  return writeFileAtomic(filePath, fileContent)
 }
 
 export const getPublicDbFilePath = () => {
