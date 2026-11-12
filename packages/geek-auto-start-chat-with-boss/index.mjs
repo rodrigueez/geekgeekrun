@@ -45,6 +45,7 @@ import {
   sortSourcesByPerformance,
   sortFiltersByPerformance
 } from './job-source-performance.mjs'
+import { buildJobCandidateRecord } from './job-candidate.mjs'
 import {
   getRecommendEntryActive,
   getExpectEntryActive,
@@ -284,9 +285,34 @@ const hasAnyCombineRecommendJobFilter = checkAnyCombineBossRecommendFilterHasCon
   anyCombineRecommendJobFilter
 )
 const expectJobRegExpStr = readConfigFile('boss.json').expectJobRegExpStr
-const jobNotMatchStrategy = readConfigFile('boss.json').jobNotMatchStrategy ?? MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS
+const jobCollectionOnly = readConfigFile('boss.json').jobCollectionOnly === true
+const jobTypeList = (() => {
+  const raw = readConfigFile('boss.json').jobTypeList
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw
+    .map((item) => Number(item))
+    .filter((item) => [0, 4, 6].includes(item))
+})()
+const activeJobSearchProfileId = (() => {
+  try {
+    return readConfigFile('job-search-profiles.json')?.activeProfileId ?? ''
+  } catch {
+    return ''
+  }
+})()
+const normalizeMarkStrategy = (strategy) =>
+  jobCollectionOnly && strategy === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS
+    ? MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL
+    : strategy
+const jobNotMatchStrategy = normalizeMarkStrategy(
+  readConfigFile('boss.json').jobNotMatchStrategy ?? MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS
+)
 
-const expectCityNotMatchStrategy = readConfigFile('boss.json').expectCityNotMatchStrategy ?? MarkAsNotSuitOp.NO_OP
+const expectCityNotMatchStrategy = normalizeMarkStrategy(
+  readConfigFile('boss.json').expectCityNotMatchStrategy ?? MarkAsNotSuitOp.NO_OP
+)
 const expectCityList = (
   !fieldsForUseCommonConfig.city ?
     readConfigFile('boss.json').expectCityList
@@ -315,7 +341,9 @@ const expectSalaryCalculateWay = (
     :
     commonJobConditionConfig.expectSalaryCalculateWay
 ) ?? SalaryCalculateWay.MONTH_SALARY
-const expectSalaryNotMatchStrategy = readConfigFile('boss.json').expectSalaryNotMatchStrategy ?? MarkAsNotSuitOp.NO_OP
+const expectSalaryNotMatchStrategy = normalizeMarkStrategy(
+  readConfigFile('boss.json').expectSalaryNotMatchStrategy ?? MarkAsNotSuitOp.NO_OP
+)
 const isSalaryFilterEnabled = expectSalaryLow || expectSalaryHigh
 const strategyScopeOptionWhenMarkSalaryNotMatch = readConfigFile('boss.json').strategyScopeOptionWhenMarkSalaryNotMatch ?? StrategyScopeOptionWhenMarkJobNotMatch.ONLY_COMPANY_MATCHED_JOB
 
@@ -332,7 +360,9 @@ if (
 }
 expectWorkExpList = Array.from(expectWorkExpListSet)
 
-const expectWorkExpNotMatchStrategy = readConfigFile('boss.json').expectWorkExpNotMatchStrategy ?? MarkAsNotSuitOp.NO_OP
+const expectWorkExpNotMatchStrategy = normalizeMarkStrategy(
+  readConfigFile('boss.json').expectWorkExpNotMatchStrategy ?? MarkAsNotSuitOp.NO_OP
+)
 const strategyScopeOptionWhenMarkJobWorkExpNotMatch = readConfigFile('boss.json').strategyScopeOptionWhenMarkJobWorkExpNotMatch ?? StrategyScopeOptionWhenMarkJobNotMatch.ONLY_COMPANY_MATCHED_JOB
 
 let jobDetailRegExpMatchLogic = (
@@ -356,7 +386,7 @@ const jobNotActiveStrategy = (() => {
   if (markAsNotActiveSelectedTimeRange === 0) {
     value = MarkAsNotSuitOp.NO_OP
   }
-  return value
+  return normalizeMarkStrategy(value)
 })()
 
 let {
@@ -411,7 +441,9 @@ const blockCompanyNameRegExp = (() => {
     return null
   }
 })()
-const blockCompanyNameRegMatchStrategy = readConfigFile('boss.json').blockCompanyNameRegMatchStrategy ?? MarkAsNotSuitOp.NO_OP
+const blockCompanyNameRegMatchStrategy = normalizeMarkStrategy(
+  readConfigFile('boss.json').blockCompanyNameRegMatchStrategy ?? MarkAsNotSuitOp.NO_OP
+)
 
 /**
  * @type { import('puppeteer').Browser }
@@ -1271,8 +1303,10 @@ async function toRecommendPage (hooks) {
               let targetJobIndex = -1
               let targetJobData, selectedJobData // they show be same; one is from list, another is from detail
               let currentJobMatchScore = null
+              let currentJobMatchDetail = null
               const isTempTargetJobEligible = (it) => {
                 return !blockBossNotNewChat.has(it.encryptBossId) &&
+                  (jobTypeList.length === 0 || jobTypeList.includes(Number(it.jobType))) &&
                   !blockBossNotActive.has(it.encryptBossId) &&
                   !blockJobNotSuit.has(it.encryptJobId) &&
                   !blockJobNotHiring.has(it.encryptJobId) &&
@@ -1535,6 +1569,14 @@ async function toRecommendPage (hooks) {
                     targetJobData,
                     'detail'
                   )
+                  currentJobMatchDetail = {
+                    reasons: [
+                      ...(detailMatchResult.reasons ?? []),
+                      ...(llmDetailResult?.reasons ?? [])
+                    ],
+                    components: detailMatchResult.components ?? null,
+                    semanticResult: semanticFilterResult ?? null
+                  }
                   if (isSemanticRejected(semanticFilterResult)) {
                     const encryptJobId = targetJobData.jobInfo.encryptId
                     semanticRejectedJobIds.add(encryptJobId)
@@ -1557,6 +1599,21 @@ async function toRecommendPage (hooks) {
                         constraints: semanticFilterResult.constraints
                       })
                     }])
+                    await hooks.jobCandidateCollected?.promise(
+                      buildJobCandidateRecord({
+                        encryptCurrentUserId: traversalState.encryptUserId,
+                        profileId: activeJobSearchProfileId,
+                        jobInfo: targetJobData.jobInfo,
+                        listJob: selectedJobData,
+                        matchScore: currentJobMatchScore,
+                        decision: 'rejected:semantic',
+                        reasons: semanticFilterResult.reasons ?? [],
+                        semanticResult: semanticFilterResult,
+                        sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                        searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                        filterConditionKey: activeFilterConditionKey ?? null
+                      })
+                    )
                     await saveTraversalCheckpoint(encryptJobId)
                     continue continueFind
                   }
@@ -1588,6 +1645,24 @@ async function toRecommendPage (hooks) {
                         llmScore: llmDetailResult?.score ?? null
                       })
                     }])
+                    await hooks.jobCandidateCollected?.promise(
+                      buildJobCandidateRecord({
+                        encryptCurrentUserId: traversalState.encryptUserId,
+                        profileId: activeJobSearchProfileId,
+                        jobInfo: targetJobData.jobInfo,
+                        listJob: selectedJobData,
+                        matchScore: finalDetailMatchScore,
+                        decision: 'rejected:low-score',
+                        reasons: [
+                          ...(detailMatchResult.reasons ?? []),
+                          ...(llmDetailResult?.reasons ?? [])
+                        ],
+                        components: detailMatchResult.components ?? null,
+                        sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                        searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                        filterConditionKey: activeFilterConditionKey ?? null
+                      })
+                    )
                     await saveTraversalCheckpoint(targetJobData.jobInfo.encryptId)
                     continue continueFind
                   }
@@ -2017,6 +2092,40 @@ async function toRecommendPage (hooks) {
           })
           await sleepWithRandomDelay(1000)
           const startChatButtonInnerHTML = await getStartChatButtonHtml(page)
+
+          if (jobCollectionOnly) {
+            await hooks.jobCandidateCollected?.promise(
+              buildJobCandidateRecord({
+                encryptCurrentUserId: traversalState.encryptUserId,
+                profileId: activeJobSearchProfileId,
+                jobInfo: targetJobData.jobInfo,
+                listJob: selectedJobData,
+                matchScore: currentJobMatchScore,
+                reasons: currentJobMatchDetail?.reasons ?? [],
+                components: currentJobMatchDetail?.components ?? null,
+                semanticResult: currentJobMatchDetail?.semanticResult ?? null,
+                sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                filterConditionKey: activeFilterConditionKey ?? null
+              })
+            )
+            await emitFunnelEvents([{
+              encryptJobId: targetJobData.jobInfo.encryptId,
+              encryptBossId: targetJobData.jobInfo.encryptUserId,
+              eventType: JobFunnelEventType.CANDIDATE_COLLECTED,
+              eventDate: new Date(),
+              jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+              sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+              searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+              filterConditionKey: activeFilterConditionKey ?? undefined,
+              filterConditionJson: activeFilterConditionJson ?? undefined,
+              matchScore: currentJobMatchScore ?? undefined
+            }])
+            traversalState.processedJobIds.add(targetJobData.jobInfo.encryptId)
+            await saveTraversalCheckpoint(targetJobData.jobInfo.encryptId)
+            await storeStorage(page).catch(() => void 0)
+            continue findInCurrentFilterCondition
+          }
 
           await hooks.newChatWillStartup?.promise(targetJobData)
           const startChatButtonProxy = await getStartChatButton(page)
