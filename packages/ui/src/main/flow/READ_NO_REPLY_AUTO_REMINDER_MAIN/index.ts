@@ -632,8 +632,14 @@ const mainLoop = async () => {
         if (!jobType) {
           isExpectJobTypeMatch = false
         } else {
-          const regExp = new RegExp(expectJobTypeRegExpStr)
-          isExpectJobTypeMatch = regExp.test(jobType)
+          try {
+            const regExp = new RegExp(expectJobTypeRegExpStr)
+            isExpectJobTypeMatch = regExp.test(jobType)
+          } catch (err) {
+            // 非法正则不应该让整个提醒循环反复崩溃。
+            console.log('invalid expectJobTypeRegExpStr', err)
+            isExpectJobTypeMatch = false
+          }
         }
       }
     }
