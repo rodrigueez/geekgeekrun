@@ -182,7 +182,9 @@ const targetCompanyList = (
     readConfigFile('target-company-list.json')
     :
     commonJobConditionConfig.expectCompanies
-).filter(it => !!it.trim());
+)
+  .map(it => String(it ?? '').trim())
+  .filter(Boolean);
 const combineRecommendJobFilterType = readConfigFile('boss.json').combineRecommendJobFilterType ?? CombineRecommendJobFilterType.ANY_COMBINE
 
 const anyCombineRecommendJobFilter = readConfigFile('boss.json').anyCombineRecommendJobFilter
