@@ -342,8 +342,8 @@ const attachRequestsListener = async (target: Target) => {
         mappedItem.text = it.text
         if (it.type === 'image') {
           mappedItem.imageUrl = it.image?.originImage?.url
-          mappedItem.imageHeight = it.image?.originImage?.url?.height
-          mappedItem.imageWidth = it.image?.originImage?.url?.width
+          mappedItem.imageHeight = it.image?.originImage?.height
+          mappedItem.imageWidth = it.image?.originImage?.width
         }
 
         return mappedItem
