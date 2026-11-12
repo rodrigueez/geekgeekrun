@@ -59,6 +59,20 @@ import {
 import { getLastUsedAndAvailableBrowser } from '../../DOWNLOAD_DEPENDENCIES/utils/browser-history'
 import { waitForCommonJobConditionDone } from '../../../features/common-job-condition'
 import { ensureConfigFileExist } from '@geekgeekrun/geek-auto-start-chat-with-boss/runtime-file-utils.mjs'
+import {
+  createJobSearchProfileFromCurrent,
+  deleteJobSearchProfile,
+  getActiveJobSearchProfileSummary,
+  listJobSearchProfiles,
+  renameJobSearchProfile,
+  saveCurrentJobSearchProfile,
+  switchJobSearchProfile,
+  syncActiveJobSearchProfile
+} from '../../../features/job-search-profile'
+import {
+  createJobSearchProfileWindow,
+  jobSearchProfileWindow
+} from '../../../window/jobSearchProfileWindow'
 
 function waitForWorkerExit(workerId: string, timeout = 30 * 1000) {
   return new Promise<void>((resolve) => {
@@ -286,7 +300,9 @@ export default function initIpc() {
       )
     }
 
-    return await Promise.all(promiseArr)
+    const result = await Promise.all(promiseArr)
+    await syncActiveJobSearchProfile()
+    return result
   })
 
   ipcMain.handle('run-geek-auto-start-chat-with-boss', async (_ev) => {
@@ -689,6 +705,84 @@ export default function initIpc() {
     mainWindow?.webContents.send('common-job-condition-config-updated', {
       config: await readConfigFile('common-job-condition-config.json')
     })
+  })
+
+  ipcMain.handle('open-job-search-profile', async () => {
+    createJobSearchProfileWindow({
+      parent: mainWindow!,
+      modal: true,
+      show: true
+    })
+  })
+  ipcMain.handle('list-job-search-profiles', async () => {
+    return await listJobSearchProfiles()
+  })
+  ipcMain.handle('get-active-job-search-profile', async () => {
+    return await getActiveJobSearchProfileSummary()
+  })
+  ipcMain.handle('create-job-search-profile', async (_ev, { name }) => {
+    const result = await createJobSearchProfileFromCurrent(name)
+    mainWindow?.webContents.send('job-search-profile-changed', {
+      id: result.activeProfileId,
+      name: result.profiles.find((it) => it.id === result.activeProfileId)?.name
+    })
+    return result
+  })
+  ipcMain.handle('switch-job-search-profile', async (_ev, { id }) => {
+    let runningWorkers: Array<{ workerId: string }> = []
+    try {
+      const status = (await sendToDaemon(
+        {
+          type: 'get-status'
+        },
+        {
+          needCallback: true,
+          timeout: 3000
+        }
+      )) as { workers?: Array<{ workerId: string }> } | undefined
+      runningWorkers = status?.workers ?? []
+    } catch {
+      runningWorkers = []
+    }
+    if (
+      runningWorkers.some((worker) =>
+        ['geekAutoStartWithBossMain', 'readNoReplyAutoReminderMain'].includes(
+          worker.workerId
+        )
+      )
+    ) {
+      throw new Error('有任务正在运行，请先停止任务再切换求职配置')
+    }
+
+    const result = await switchJobSearchProfile(id)
+    mainWindow?.webContents.send('job-search-profile-changed', {
+      id: result.activeProfileId,
+      name: result.profiles.find((it) => it.id === result.activeProfileId)?.name
+    })
+    setTimeout(() => {
+      jobSearchProfileWindow?.close()
+      mainWindow?.webContents.reload()
+    }, 300)
+    return result
+  })
+  ipcMain.handle('save-current-job-search-profile', async () => {
+    return await saveCurrentJobSearchProfile()
+  })
+  ipcMain.handle('rename-job-search-profile', async (_ev, { id, name }) => {
+    const result = await renameJobSearchProfile(id, name)
+    const activeProfile = result.profiles.find(
+      (profile) => profile.id === result.activeProfileId
+    )
+    if (activeProfile) {
+      mainWindow?.webContents.send('job-search-profile-changed', {
+        id: activeProfile.id,
+        name: activeProfile.name
+      })
+    }
+    return result
+  })
+  ipcMain.handle('delete-job-search-profile', async (_ev, { id }) => {
+    return await deleteJobSearchProfile(id)
   })
 
   ipcMain.handle('exit-app-immediately', () => {

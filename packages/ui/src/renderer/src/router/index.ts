@@ -67,6 +67,13 @@ const routes: Array<RouteRecordRaw> = [
     }
   },
   {
+    path: '/jobSearchProfile',
+    component: () => import('@renderer/page/JobSearchProfile/index.vue'),
+    meta: {
+      title: '求职配置'
+    }
+  },
+  {
     path: '/main-layout',
     component: () => import('@renderer/page/MainLayout/index.vue'),
     redirect: '/main-layout/GeekAutoStartChatWithBoss',

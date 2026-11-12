@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import path from 'path'
 import { writeConfigFile } from '@geekgeekrun/geek-auto-start-chat-with-boss/runtime-file-utils.mjs'
+import { syncActiveJobSearchProfile } from '../features/job-search-profile'
 
 export let commonJobConditionConfigWindow: BrowserWindow | null = null
 export function createCommonJobConditionConfigWindow(
@@ -46,6 +47,7 @@ export function createCommonJobConditionConfigWindow(
 
   ipcMain.handle('save-common-job-condition-config', async (_ev, payload) => {
     await writeConfigFile('common-job-condition-config.json', payload)
+    await syncActiveJobSearchProfile()
     commonJobConditionConfigWindow!.close()
   })
   commonJobConditionConfigWindow!.once('closed', () => {

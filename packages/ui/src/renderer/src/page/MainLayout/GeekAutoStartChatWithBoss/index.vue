@@ -8,7 +8,23 @@
       }"
     >
       <div class="form-wrap geek-auto-start-run-with-boss">
-        <el-form ref="formRef" :model="formContent" label-position="top" :rules="formRules">
+        <div class="job-search-profile-bar">
+          <div class="job-search-profile-bar__info">
+            <span class="job-search-profile-bar__label">求职配置</span>
+            <span class="job-search-profile-bar__name">{{
+              activeJobSearchProfileName || '默认'
+            }}</span>
+            <span class="job-search-profile-bar__hint">离开表单时自动保存</span>
+          </div>
+          <el-button size="small" @click="handleOpenJobSearchProfile">切换 / 管理</el-button>
+        </div>
+        <el-form
+          ref="formRef"
+          :model="formContent"
+          label-position="top"
+          :rules="formRules"
+          @focusout="handleFormFocusOut"
+        >
           <el-card class="config-section">
             <div>
               <div font-size-14px>
@@ -243,6 +259,7 @@
               使用简历、职位标题、技能、薪资、经验和招聘者活跃度给职位打分，优先处理高分职位。
               没有填写简历时不会改变原有顺序。
             </div>
+            <el-button size="small" mb10px @click="handleClickEditResume">编辑简历</el-button>
             <el-checkbox v-model="formContent.jobMatchEnabled">启用职位匹配评分</el-checkbox>
             <div v-if="formContent.jobMatchEnabled" mt10px>
               <span>最低投递分数</span>
@@ -1982,6 +1999,35 @@ import {
   normalizeCommaSplittedStr
 } from './common'
 const { ipcRenderer } = window.electron
+
+const activeJobSearchProfileName = ref('')
+electron.ipcRenderer.invoke('get-active-job-search-profile').then((res) => {
+  activeJobSearchProfileName.value = res?.name ?? ''
+})
+const unListenJobSearchProfileChanged = electron.ipcRenderer.on(
+  'job-search-profile-changed',
+  (_, payload) => {
+    activeJobSearchProfileName.value = payload?.name ?? ''
+  }
+)
+onUnmounted(() => {
+  unListenJobSearchProfileChanged()
+})
+
+async function handleOpenJobSearchProfile() {
+  gtagRenderer('open_job_search_profile_clicked', { entry: 'auto-start' })
+  if (
+    isFormReady.value &&
+    !(await persistCurrentForm({ notifyOnInvalid: true }))
+  ) {
+    return
+  }
+  try {
+    await electron.ipcRenderer.invoke('open-job-search-profile')
+  } catch (err) {
+    console.log(err)
+  }
+}
 const gtagRenderer = (name, params?: object) => {
   return baseGtagRenderer(name, {
     scene: 'gascwb-config',
@@ -2276,6 +2322,8 @@ electron.ipcRenderer.invoke('fetch-config-file-content').then((res) => {
     expectSalaryHigh: res.config['common-job-condition-config.json']?.expectSalaryHigh ?? null,
     expectCityList: res.config['common-job-condition-config.json']?.expectCityList ?? []
   }
+  isFormReady.value = true
+  lastSavedFormSnapshot = JSON.stringify(formContent.value)
 })
 
 const jobSourceFormItemSectionEl = ref()
@@ -2378,6 +2426,69 @@ onMounted(async () => {
   }
 })
 
+const isFormReady = ref(false)
+let lastSavedFormSnapshot = ''
+let persistPromise: Promise<boolean> | null = null
+
+function buildFormContentForSave() {
+  const clonedFormContent = JSON.parse(JSON.stringify(formContent.value))
+  clonedFormContent.jobSourceList = formatJobSourceFormValueToConfig(
+    clonedFormContent.__jobSourceList
+  )
+  delete clonedFormContent.__jobSourceList
+  return clonedFormContent
+}
+
+async function persistCurrentForm({ notifyOnInvalid = false } = {}) {
+  if (!isFormReady.value || !formRef.value) {
+    return false
+  }
+  if (persistPromise) {
+    return persistPromise
+  }
+
+  formContent.value.expectCompanies = normalizeCommaSplittedStr(
+    formContent.value.expectCompanies
+  )
+  if (JSON.stringify(formContent.value) === lastSavedFormSnapshot) {
+    return true
+  }
+
+  persistPromise = (async () => {
+    try {
+      await formRef.value!.validate()
+    } catch (err) {
+      console.log(err)
+      if (notifyOnInvalid) {
+        ElMessage.error({
+          message: '表单校验失败，当前修改未保存',
+          grouping: true
+        })
+      }
+      return false
+    }
+
+    await electron.ipcRenderer.invoke(
+      'save-config-file-from-ui',
+      JSON.stringify(buildFormContentForSave())
+    )
+    mittBus.emit('auto-start-chat-with-boss-config-saved')
+    lastSavedFormSnapshot = JSON.stringify(formContent.value)
+    return true
+  })().finally(() => {
+    persistPromise = null
+  })
+  return persistPromise
+}
+
+const handleFormFocusOut = debounce(() => {
+  const activeElement = document.activeElement
+  if (document.hasFocus() && formRef.value?.$el?.contains(activeElement)) {
+    return
+  }
+  void persistCurrentForm()
+}, 300)
+
 const handleSubmit = async () => {
   gtagRenderer('save_config_and_launch_clicked', {
     has_dingtalk_robot_token: !!formContent.value?.dingtalkRobotAccessToken,
@@ -2394,23 +2505,9 @@ const handleSubmit = async () => {
   })
   // remove the obsolete filter - expectJobRegExpStr
   formContent.value.expectJobRegExpStr = undefined
-  try {
-    await formRef.value!.validate()
-  } catch (err) {
-    ElMessage.error({
-      message: '表单校验失败，请检查有误的内容',
-      grouping: true
-    })
-    console.log(err)
+  if (!(await persistCurrentForm({ notifyOnInvalid: true }))) {
     return
   }
-  const clonedFormContent = JSON.parse(JSON.stringify(formContent.value))
-  clonedFormContent.jobSourceList = formatJobSourceFormValueToConfig(
-    clonedFormContent.__jobSourceList
-  )
-  delete clonedFormContent.__jobSourceList
-  await electron.ipcRenderer.invoke('save-config-file-from-ui', JSON.stringify(clonedFormContent))
-  mittBus.emit('auto-start-chat-with-boss-config-saved')
   gtagRenderer('config_saved_and_launch_auto_start_chat', {
     has_dingtalk_robot_token: !!formContent.value?.dingtalkRobotAccessToken
   })
@@ -2452,24 +2549,9 @@ const handleSave = async () => {
       opTimes: formContent.value.sageTimeOpTimes
     })
   })
-  formContent.value.expectCompanies = normalizeCommaSplittedStr(formContent.value.expectCompanies)
-  try {
-    await formRef.value!.validate()
-  } catch (err) {
-    ElMessage.error({
-      message: '表单校验失败，请检查有误的内容',
-      grouping: true
-    })
-    console.log(err)
+  if (!(await persistCurrentForm({ notifyOnInvalid: true }))) {
     return
   }
-  const clonedFormContent = JSON.parse(JSON.stringify(formContent.value))
-  clonedFormContent.jobSourceList = formatJobSourceFormValueToConfig(
-    clonedFormContent.__jobSourceList
-  )
-  delete clonedFormContent.__jobSourceList
-  await electron.ipcRenderer.invoke('save-config-file-from-ui', JSON.stringify(clonedFormContent))
-  mittBus.emit('auto-start-chat-with-boss-config-saved')
   ElMessage.success('配置保存成功')
   gtagRenderer('config_saved')
 }
@@ -2574,6 +2656,15 @@ function handleHowToFillDetailFilterClick() {
     'open-external-link',
     'https://linux.do/t/topic/640626/74?u=geekgeekrun'
   )
+}
+
+async function handleClickEditResume() {
+  gtagRenderer('edit_resume_clicked', { entry: 'job-match-setting' })
+  try {
+    await electron.ipcRenderer.invoke('resume-edit')
+  } catch (err) {
+    console.log(err)
+  }
 }
 
 function formatJobSourceConfigToFormValue(config = []) {
@@ -2742,6 +2833,34 @@ const fillCommonConfigField = (field) => {
       padding-left: 20px;
       padding-right: 20px;
       padding-bottom: 20px;
+      .job-search-profile-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        max-width: 1000px;
+        margin: 0 auto 10px;
+        padding: 10px 14px;
+        border: 1px solid var(--el-card-border-color);
+        border-radius: 4px;
+        background: var(--el-fill-color-lighter);
+      }
+      .job-search-profile-bar__info {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .job-search-profile-bar__label {
+        color: #888;
+        font-size: 12px;
+      }
+      .job-search-profile-bar__name {
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .job-search-profile-bar__hint {
+        color: #999;
+        font-size: 12px;
+      }
       .config-section + .config-section {
         margin-top: 10px;
       }

@@ -2,6 +2,8 @@
   <div class="group-item">
     <div class="group-title">全局设置</div>
     <div flex flex-col class="link-list">
+      <a href="javascript:void(0)" @click="handleClickEditResume"> 编辑简历 </a>
+      <a href="javascript:void(0)" @click="handleClickJobSearchProfile"> 求职配置 </a>
       <a href="javascript:void(0)" @click="handleClickConfigCommonJobCondition">
         公共职位筛选条件
       </a>
@@ -53,6 +55,24 @@ const handleClickConfigLlm = async () => {
   gtagRenderer('config_llm_clicked')
   try {
     await electron.ipcRenderer.invoke('llm-config')
+  } catch (err) {
+    console.log(err)
+  }
+}
+
+const handleClickEditResume = async () => {
+  gtagRenderer('edit_resume_clicked', { entry: 'left-nav' })
+  try {
+    await electron.ipcRenderer.invoke('resume-edit')
+  } catch (err) {
+    console.log(err)
+  }
+}
+
+const handleClickJobSearchProfile = async () => {
+  gtagRenderer('job_search_profile_clicked', { entry: 'left-nav' })
+  try {
+    await electron.ipcRenderer.invoke('open-job-search-profile')
   } catch (err) {
     console.log(err)
   }
