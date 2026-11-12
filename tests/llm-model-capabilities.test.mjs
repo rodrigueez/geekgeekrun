@@ -3,7 +3,7 @@ import test from 'node:test'
 import {
   normalizeModelListItem,
   shouldSendReasoningEffort
-} from '../packages/utils/gpt-request.mjs'
+} from '../packages/utils/llm-model-capabilities.mjs'
 
 test('normalizes provider reasoning levels and output limits', () => {
   const model = normalizeModelListItem({
