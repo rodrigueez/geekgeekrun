@@ -30,7 +30,7 @@ export const waitForSageTimeOrJustContinue = async ({
     return
   }
   const tagText = tag ? ` ${tag}` : ''
-  if (recordedOpCount > sageTimeOpTimes) {
+  if (recordedOpCount >= sageTimeOpTimes) {
     totalEnabledTimes++
     console.log(`[SageTime${tagText}] 请求已达限制，开启；当前记录次数 ${recordedOpCount}；第 ${totalEnabledTimes} 次开启`)
     await hooks?.sageTimeEnter?.promise({
