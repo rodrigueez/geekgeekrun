@@ -1,4 +1,4 @@
-import { DataSource, Raw } from "typeorm";
+import { DataSource, In, MoreThanOrEqual } from "typeorm";
 import { BossActiveStatusRecord } from "./entity/BossActiveStatusRecord";
 import { BossInfo } from "./entity/BossInfo";
 import { CompanyInfo } from "./entity/CompanyInfo";
@@ -301,16 +301,35 @@ export async function saveChatMessageRecord(
   ds: DataSource,
   records: ChatMessageRecord[]
 ) {
-  //#region mark-as-not-suit-log
-  const chatMessageRecordList = records.map(it => {
-    const o = new ChatMessageRecord()
-    Object.assign(o, it)
-    return o
-  })
   const chatMessageRecordRepository = ds.getRepository(ChatMessageRecord);
-  await chatMessageRecordRepository.save(chatMessageRecordList);
-  //#endregion
-  return
+  const recordMap = new Map<number, ChatMessageRecord>()
+  for (const record of records) {
+    if (record.mid === null || record.mid === undefined) {
+      continue
+    }
+    const message = new ChatMessageRecord()
+    Object.assign(message, record)
+    recordMap.set(message.mid, message)
+  }
+  const messageList = Array.from(recordMap.values())
+  if (!messageList.length) {
+    return 0
+  }
+  const existingRecords = await chatMessageRecordRepository.find({
+    select: {
+      mid: true
+    },
+    where: {
+      mid: In(messageList.map(item => item.mid))
+    }
+  })
+  const existingMessageIdSet = new Set(existingRecords.map(item => item.mid))
+  const newMessageList = messageList.filter(item => !existingMessageIdSet.has(item.mid))
+  if (!newMessageList.length) {
+    return 0
+  }
+  await chatMessageRecordRepository.save(newMessageList);
+  return newMessageList.length
 }
 
 export async function saveGptCompletionRequestRecord(
@@ -331,38 +350,51 @@ export async function saveGptCompletionRequestRecord(
   return
 }
 
-export async function getNotSuitMarkRecordsInLastSomeDays (ds: DataSource, days = 0) {
+export async function getNotSuitMarkRecordsInLastSomeDays (
+  ds: DataSource,
+  days = 0,
+  encryptUserId?: string
+) {
   const repo = ds.getRepository(MarkAsNotSuitLog)
-  const result = await repo.findBy({
-    date: Raw(alias => `DATE(${alias}) >= DATE('${
-      new Date(
-        Number(new Date()) - days * 24 * 60 * 60 * 1000
-      ).toISOString()
-    }')`)
-  })
+  const where: any = {
+    date: MoreThanOrEqual(
+      new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    )
+  }
+  if (encryptUserId) {
+    where.encryptCurrentUserId = encryptUserId
+  }
+  const result = await repo.find({ where })
   return result
 }
 
-export async function getChatStartupRecordsInLastSomeDays (ds: DataSource, days = 0) {
+export async function getChatStartupRecordsInLastSomeDays (
+  ds: DataSource,
+  days = 0,
+  encryptUserId?: string
+) {
   const repo = ds.getRepository(ChatStartupLog)
-  const result = await repo.findBy({
-    date: Raw(alias => `DATE(${alias}) >= DATE('${
-      new Date(
-        Number(new Date()) - days * 24 * 60 * 60 * 1000
-      ).toISOString()
-    }')`)
-  })
+  const where: any = {
+    date: MoreThanOrEqual(
+      new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    )
+  }
+  if (encryptUserId) {
+    where.encryptCurrentUserId = encryptUserId
+  }
+  const result = await repo.find({ where })
   return result
 }
 
 export async function getBossIdsByJobIds (ds: DataSource, jobIds: string[] = []) {
+  if (!jobIds.length) {
+    return []
+  }
   const repo = ds.getRepository(JobInfo)
   const result = await repo.find({
-    where: jobIds.map(
-      id => ({
-        encryptJobId: id
-      })
-    )
+    where: {
+      encryptJobId: In(jobIds)
+    }
   })
   return result
 }

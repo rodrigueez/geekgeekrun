@@ -33,12 +33,14 @@ import {
 import { UpdateChatStartupLogTable1729182577167 } from "./migrations/1729182577167-UpdateChatStartupLogTable";
 import minimist from 'minimist'
 import { UpdateBossInfoTable1732032381304 } from "./migrations/1732032381304-UpdateBossInfoTable";
-import { JobHireStatus, MarkAsNotSuitOp, MarkAsNotSuitReason } from "./enums";
+import { JobHireStatus } from "./enums";
 import { AddColumnForMarkAsNotSuitLog1746092370665 } from "./migrations/1746092370665-AddColumnForMarkAsNotSuitLog";
 import { Init1000000000000 } from "./migrations/1000000000000-Init";
 import { AddJobSourceColumnForChatStartupLogAndMarkAsNotSuitLog1752380078526 } from "./migrations/1752380078526-AddJobSourceColumnForChatStartupLogAndMarkAsNotSuitLog";
 import { AddJobHireStatusTable1766466476822 } from "./migrations/1766466476822-AddJobHireStatusTable";
 import { AddReasoningTokensToLlmModelUsageRecord1767000000000 } from "./migrations/1767000000000-AddReasoningTokensToLlmModelUsageRecord";
+import { AddQueryIndexes1767100000000 } from "./migrations/1767100000000-AddQueryIndexes";
+import { ScrubLlmUsageSecrets1767100000001 } from "./migrations/1767100000001-ScrubLlmUsageSecrets";
 import chunk from 'lodash/chunk'
 import * as typeorm from 'typeorm'
 
@@ -47,7 +49,7 @@ export function initDb(dbFilePath) {
   const appDataSource = new DataSource({
     type: "better-sqlite3",
     synchronize: false,
-    logging: true,
+    logging: process.env.GEEKGEEKRUN_DB_LOGGING === '1',
     logger: "simple-console",
     database: dbFilePath,
     entities: [
@@ -78,7 +80,9 @@ export function initDb(dbFilePath) {
       AddColumnForMarkAsNotSuitLog1746092370665,
       AddJobSourceColumnForChatStartupLogAndMarkAsNotSuitLog1752380078526,
       AddJobHireStatusTable1766466476822,
-      AddReasoningTokensToLlmModelUsageRecord1767000000000
+      AddReasoningTokensToLlmModelUsageRecord1767000000000,
+      AddQueryIndexes1767100000000,
+      ScrubLlmUsageSecrets1767100000001
     ],
     migrationsRun: true
   });
@@ -95,6 +99,58 @@ export default class SqlitePlugin {
   }
 
   userInfo = null
+  blockSets: null | {
+    blockJobNotSuit: Set<string>
+    blockBossNotActive: Set<string>
+    blockBossNotNewChat: Set<string>
+    blockJobNotHiring: Set<string>
+  } = null
+
+  async loadPersistentBlockLists(encryptUserId: string) {
+    if (!this.blockSets || !encryptUserId) {
+      return
+    }
+    const ds = await this.initPromise;
+    const last7DayMarkRecords =
+      (await getNotSuitMarkRecordsInLastSomeDays(ds, 7, encryptUserId)) ?? [];
+    for (const record of last7DayMarkRecords) {
+      if (record.encryptJobId) {
+        this.blockSets.blockJobNotSuit.add(record.encryptJobId)
+      }
+    }
+
+    const unavailableJobHireStatusRecords = await ds
+      .getRepository(JobHireStatusRecord)
+      .find({
+        where: {
+          hireStatus: typeorm.In([
+            JobHireStatus.CLOSED,
+            JobHireStatus.DELETED
+          ]),
+          lastSeenDate: typeorm.MoreThanOrEqual(
+            new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+          )
+        }
+      })
+    for (const record of unavailableJobHireStatusRecords) {
+      this.blockSets.blockJobNotHiring.add(record.encryptJobId)
+    }
+
+    const last30DayChatStartupRecords =
+      (await getChatStartupRecordsInLastSomeDays(ds, 30, encryptUserId)) ?? [];
+    const chattedJobIds = last30DayChatStartupRecords.map(it => it.encryptJobId)
+    if (chattedJobIds.length > 0) {
+      const chattedJobIdChunks = chunk(chattedJobIds, 200)
+      const chattedBossIds = [];
+      for (const chattedJobIdChunk of chattedJobIdChunks) {
+        const chattedBossIdChunk = ((await getBossIdsByJobIds(ds, chattedJobIdChunk)) ?? []).map(it => it.encryptBossId)
+        chattedBossIds.push(...chattedBossIdChunk)
+      }
+      for (const id of chattedBossIds) {
+        this.blockSets.blockBossNotNewChat.add(id)
+      }
+    }
+  }
 
   apply(hooks) {
     hooks.pageGotten.tap(
@@ -124,7 +180,6 @@ export default class SqlitePlugin {
         }
         const { zpData: userInfo } = userInfoResponse;
         this.userInfo = userInfo
-        console.log(userInfo);
 
         const ds = await this.initPromise;
         const userInfoRepository = ds.getRepository(UserInfo);
@@ -133,84 +188,24 @@ export default class SqlitePlugin {
         user.encryptUserId = userInfo.encryptUserId;
         user.name = userInfo.name;
 
-        return await userInfoRepository.save(user);
+        await userInfoRepository.save(user);
+        await this.loadPersistentBlockLists(userInfo.encryptUserId)
+        return user;
       }
     );
     hooks.mainFlowWillLaunch.tapPromise(
       "SqlitePlugin",
       async ({
-        jobNotMatchStrategy,
-        jobNotActiveStrategy,
-        expectCityNotMatchStrategy,
         blockJobNotSuit,
         blockBossNotActive,
-        blockBossNotNewChat
+        blockBossNotNewChat,
+        blockJobNotHiring = new Set<string>()
       }) => {
-        if (
-          jobNotMatchStrategy === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL ||
-          jobNotActiveStrategy === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL ||
-          expectCityNotMatchStrategy === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL
-        ) {
-          const ds = await this.initPromise;
-          const last7DayMarkRecords = (await getNotSuitMarkRecordsInLastSomeDays(ds, 7)) ?? [];
-          if (
-            jobNotMatchStrategy === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL ||
-            jobNotMatchStrategy === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS
-          ) {
-            last7DayMarkRecords
-              .filter(it =>
-                [
-                  MarkAsNotSuitReason.JOB_NOT_SUIT,
-                  MarkAsNotSuitReason.USER_MANUAL_OPERATION_WITH_UNKNOWN_REASON
-                ].includes(it.markReason)
-              )
-              .map(
-                it => it.encryptJobId
-              )
-              .forEach(
-                id => blockJobNotSuit.add(id)
-              )
-          }
-          if (
-            jobNotActiveStrategy === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL ||
-            jobNotActiveStrategy === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS
-          ) {
-            last7DayMarkRecords
-              .filter(it => it.markReason === MarkAsNotSuitReason.BOSS_INACTIVE)
-              .map(
-                it => it.encryptJobId
-              )
-              .forEach(
-                id => blockJobNotSuit.add(id)
-              )
-          }
-          if (
-            expectCityNotMatchStrategy === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL ||
-            expectCityNotMatchStrategy === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS
-          ) {
-            last7DayMarkRecords
-              .filter(it => it.markReason === MarkAsNotSuitReason.JOB_CITY_NOT_SUIT)
-              .map(
-                it => it.encryptJobId
-              )
-              .forEach(
-                id => blockJobNotSuit.add(id)
-              )
-          }
-          const last30DayChatStartupRecords = (await getChatStartupRecordsInLastSomeDays(ds, 30)) ?? [];
-          const chattedJobIds = last30DayChatStartupRecords.map(it => it.encryptJobId)
-          if (chattedJobIds.length === 0) {
-            return
-          }
-          const chattedJobIdChunks = chunk(chattedJobIds, 200)
-          const chattedBossIds = [];
-          for (const chattedJobIdChunk of chattedJobIdChunks) {
-            const chattedBossIdChunk = ((await getBossIdsByJobIds(ds, chattedJobIdChunk)) ?? []).map(it => it.encryptBossId)
-            chattedBossIds.push(...chattedBossIdChunk)
-          }
-          for (const id of chattedBossIds) {
-            blockBossNotNewChat.add(id)
-          }
+        this.blockSets = {
+          blockJobNotSuit,
+          blockBossNotActive,
+          blockBossNotNewChat,
+          blockJobNotHiring
         }
       }
     );
