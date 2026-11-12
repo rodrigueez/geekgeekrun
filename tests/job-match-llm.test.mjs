@@ -4,7 +4,7 @@ import {
   getBaseURLFromCompleteApiUrl,
   parseJobMatchResponse,
   pickJobMatchLlmConfig
-} from '../packages/geek-auto-start-chat-with-boss/job-match-llm.mjs'
+} from '../packages/geek-auto-start-chat-with-boss/job-match-llm-parse.mjs'
 
 test('derives the OpenAI-compatible base URL from a complete endpoint', () => {
   assert.equal(

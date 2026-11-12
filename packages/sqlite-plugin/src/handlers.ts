@@ -525,6 +525,10 @@ export async function getJobSourcePerformanceStats(
   if (!encryptCurrentUserId) {
     return []
   }
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .replace("T", " ")
+    .replace("Z", "")
   return ds.query(
     `SELECT
       "sourceKey" AS "sourceKey",
@@ -544,7 +548,7 @@ export async function getJobSourcePerformanceStats(
       JobFunnelEventType.REPLY_RECEIVED,
       JobFunnelEventType.INTERVIEW_SCHEDULED,
       encryptCurrentUserId,
-      new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+      cutoff
     ]
   )
 }
