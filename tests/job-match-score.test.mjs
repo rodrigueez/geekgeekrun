@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   buildResumeProfile,
+  combineMatchScores,
+  getJobMatchInputHash,
+  getResumeHash,
   normalizeMatchWeights,
   rankJobCandidates,
   scoreJobMatch
@@ -106,4 +109,23 @@ test('normalizes invalid weight values', () => {
     company: 10,
     activity: 5
   })
+})
+
+test('combines deterministic and LLM scores with a bounded weight', () => {
+  assert.equal(combineMatchScores(80, 60, 0.3), 74)
+  assert.equal(combineMatchScores(80, NaN, 0.3), 80)
+  assert.equal(combineMatchScores(80, 100, 2), 100)
+})
+
+test('builds stable resume and job hashes', () => {
+  const profile = buildResumeProfile(resume)
+  assert.equal(getResumeHash(profile), getResumeHash(profile))
+  assert.equal(
+    getJobMatchInputHash({ jobName: '前端', showSkills: ['Vue'] }),
+    getJobMatchInputHash({ jobName: '前端', showSkills: ['Vue'] })
+  )
+  assert.notEqual(
+    getJobMatchInputHash({ jobName: '前端' }),
+    getJobMatchInputHash({ jobName: '后端' })
+  )
 })

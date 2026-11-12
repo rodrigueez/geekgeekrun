@@ -21,6 +21,9 @@
     "company": 10,
     "activity": 5
   },
+  "jobMatchLlmEnabled": false,
+  "jobMatchLlmTopN": 3,
+  "jobMatchLlmMaxCallsPerRun": 20,
   "expectJobRegExpStr": "",
   "expectJobNameRegExpStr": "",
   "expectJobTypeRegExpStr": "",

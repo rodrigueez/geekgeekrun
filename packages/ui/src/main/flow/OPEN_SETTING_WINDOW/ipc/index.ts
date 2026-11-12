@@ -212,6 +212,15 @@ export default function initIpc() {
     if (hasOwn(payload, 'jobMatchWeights')) {
       bossConfig.jobMatchWeights = payload.jobMatchWeights
     }
+    if (hasOwn(payload, 'jobMatchLlmEnabled')) {
+      bossConfig.jobMatchLlmEnabled = payload.jobMatchLlmEnabled
+    }
+    if (hasOwn(payload, 'jobMatchLlmTopN')) {
+      bossConfig.jobMatchLlmTopN = payload.jobMatchLlmTopN
+    }
+    if (hasOwn(payload, 'jobMatchLlmMaxCallsPerRun')) {
+      bossConfig.jobMatchLlmMaxCallsPerRun = payload.jobMatchLlmMaxCallsPerRun
+    }
     if (hasOwn(payload, 'jobSourceList')) {
       bossConfig.jobSourceList = payload.jobSourceList
     }

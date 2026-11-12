@@ -56,3 +56,8 @@ export enum JobFunnelEventType {
   INTERVIEW_SCHEDULED = 6,
   LOW_MATCH_SCORE = 7,
 }
+
+export enum JobMatchScorerType {
+  DETERMINISTIC = 1,
+  LLM = 2,
+}

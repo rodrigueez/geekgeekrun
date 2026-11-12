@@ -29,8 +29,15 @@ import {
   buildResumeProfile,
   normalizeMatchWeights,
   rankJobCandidates,
-  scoreJobMatch
+  scoreJobMatch,
+  getResumeHash,
+  getJobMatchInputHash,
+  combineMatchScores
 } from './job-match-score.mjs'
+import {
+  pickJobMatchLlmConfig,
+  requestJobMatchScore
+} from './job-match-llm.mjs'
 import { default as jobFilterConditions } from './internal-config/job-filter-conditions-20241002.json'
 import { default as rawIndustryFilterExemption } from './internal-config/job-filter-industry-filter-exemption-20241002.json'
 import { ChatStartupFrom } from '@geekgeekrun/sqlite-plugin/dist/entity/ChatStartupLog'
@@ -42,7 +49,8 @@ import {
   JobDetailRegExpMatchLogic,
   JobSource,
   CombineRecommendJobFilterType,
-  JobFunnelEventType
+  JobFunnelEventType,
+  JobMatchScorerType
 } from '@geekgeekrun/sqlite-plugin/dist/enums'
 import {
   activeDescList,
@@ -161,6 +169,31 @@ const jobMatchWeights = normalizeMatchWeights(
 )
 const resumeProfile = buildResumeProfile(readConfigFile('resumes.json')?.[0])
 const isJobMatchScoringEnabled = jobMatchEnabled && resumeProfile.isUsable
+const jobMatchLlmEnabled = readConfigFile('boss.json').jobMatchLlmEnabled ?? false
+const jobMatchLlmTopN = (() => {
+  const value = Number(readConfigFile('boss.json').jobMatchLlmTopN)
+  if (!Number.isFinite(value) || value < 0) {
+    return 3
+  }
+  return Math.min(Math.floor(value), 20)
+})()
+const jobMatchLlmMaxCallsPerRun = (() => {
+  const value = Number(readConfigFile('boss.json').jobMatchLlmMaxCallsPerRun)
+  if (!Number.isFinite(value) || value < 0) {
+    return 20
+  }
+  return Math.min(Math.floor(value), 500)
+})()
+const jobMatchLlmWeight = 0.3
+const jobMatchLlmConfig = pickJobMatchLlmConfig(readConfigFile('llm.json'))
+const jobMatchLlmModelId = jobMatchLlmConfig?.model ?? ''
+const isJobMatchLlmScoringEnabled =
+  jobMatchLlmEnabled &&
+  isJobMatchScoringEnabled &&
+  jobMatchLlmTopN > 0 &&
+  jobMatchLlmMaxCallsPerRun > 0 &&
+  Boolean(jobMatchLlmConfig)
+const resumeHash = getResumeHash(resumeProfile)
 if (!checkAnyCombineBossRecommendFilterHasCondition(anyCombineRecommendJobFilter)) {
   isSkipEmptyConditionForCombineRecommendJobFilter = false
 }
@@ -958,6 +991,93 @@ async function toRecommendPage (hooks) {
     }
   }
 
+  const llmScoreCache = new Map()
+  let llmCallCount = 0
+
+  const getCachedLlmMatchScore = (encryptJobId) => {
+    const cached = llmScoreCache.get(encryptJobId)
+    return cached && !cached.failed ? cached : null
+  }
+
+  const requestLlmMatchScore = async (job, deterministicScore) => {
+    if (!isJobMatchLlmScoringEnabled || !traversalState.encryptUserId) {
+      return null
+    }
+    const encryptJobId = job?.jobInfo?.encryptId ?? job?.encryptJobId
+    if (!encryptJobId) {
+      return null
+    }
+    if (llmScoreCache.has(encryptJobId)) {
+      return getCachedLlmMatchScore(encryptJobId)
+    }
+    const cacheContext = {}
+    try {
+      await hooks.jobMatchScoreCacheGet?.promise?.(
+        {
+          encryptCurrentUserId: traversalState.encryptUserId,
+          encryptJobId,
+          resumeHash,
+          modelId: jobMatchLlmModelId,
+          scorerType: JobMatchScorerType.LLM,
+          inputHash: getJobMatchInputHash(job)
+        },
+        cacheContext
+      )
+    } catch (err) {
+      console.log('read job match score cache failed', err)
+    }
+    if (cacheContext.score?.score !== undefined) {
+      let reasons = []
+      try {
+        reasons = cacheContext.score.reasonsJson
+          ? JSON.parse(cacheContext.score.reasonsJson)
+          : []
+      } catch {}
+      const result = {
+        score: cacheContext.score.score,
+        reasons
+      }
+      llmScoreCache.set(encryptJobId, result)
+      return result
+    }
+    if (llmCallCount >= jobMatchLlmMaxCallsPerRun) {
+      return null
+    }
+    llmCallCount++
+    try {
+      const result = await requestJobMatchScore({
+        llmConfig: jobMatchLlmConfig,
+        resumeText: resumeProfile.text,
+        job,
+        deterministicScore
+      })
+      if (!result) {
+        llmScoreCache.set(encryptJobId, { failed: true })
+        return null
+      }
+      llmScoreCache.set(encryptJobId, result)
+      try {
+        await hooks.jobMatchScoreCacheSet?.promise?.({
+          encryptCurrentUserId: traversalState.encryptUserId,
+          encryptJobId,
+          resumeHash,
+          modelId: jobMatchLlmModelId,
+          scorerType: JobMatchScorerType.LLM,
+          score: result.score,
+          reasons: result.reasons,
+          inputHash: getJobMatchInputHash(job)
+        })
+      } catch (err) {
+        console.log('save job match score cache failed', err)
+      }
+      return result
+    } catch (err) {
+      llmScoreCache.set(encryptJobId, { failed: true })
+      console.log('request job match llm score failed', err)
+      return null
+    }
+  }
+
   afterPageLoad: while (true) {
     const sourceCheckpoint = findCheckpointBySourceKey(
       traversalState.checkpoints,
@@ -1253,13 +1373,41 @@ async function toRecommendPage (hooks) {
                   getOptions: getJobMatchOptionsForListJob
                 })
               }
-              function getTempTargetJobIndexToCheckDetail () {
-                return getRankedTargetJobs()[0]?.index ?? -1
+              const getRankedTargetJobsWithLlm = async () => {
+                const ranked = getRankedTargetJobs()
+                if (!isJobMatchLlmScoringEnabled || !ranked.length) {
+                  return ranked
+                }
+                const candidates = [...ranked]
+                const topCandidates = candidates.slice(0, jobMatchLlmTopN)
+                for (const candidate of topCandidates) {
+                  const llmResult = await requestLlmMatchScore(
+                    candidate.job,
+                    candidate.score
+                  )
+                  if (llmResult) {
+                    candidate.llmScore = llmResult.score
+                    candidate.reasons = [
+                      ...(candidate.reasons ?? []),
+                      ...(llmResult.reasons ?? [])
+                    ]
+                    candidate.score = combineMatchScores(
+                      candidate.score,
+                      llmResult.score,
+                      jobMatchLlmWeight
+                    )
+                  }
+                }
+                return candidates.sort((a, b) => b.score - a.score || a.index - b.index)
+              }
+              async function getTempTargetJobIndexToCheckDetail () {
+                const ranked = await getRankedTargetJobsWithLlm()
+                return ranked[0]?.index ?? -1
               }
               continueFind: while (targetJobIndex < 0 && !hasReachLastPage) {
                 currentJobMatchScore = null
                 // when disable company allow list, we will believe that the first one in the list is your expect job.
-                let tempTargetJobIndexToCheckDetail = getTempTargetJobIndexToCheckDetail()
+                let tempTargetJobIndexToCheckDetail = await getTempTargetJobIndexToCheckDetail()
                 while (tempTargetJobIndexToCheckDetail < 0 && !hasReachLastPage) {
                   // fetch new
                   const recommendJobListElBBox = await recommendJobListElProxy.boundingBox()
@@ -1296,7 +1444,7 @@ async function toRecommendPage (hooks) {
                   }, { timeout: 15 * 1000 }).catch(() => void 0)
                   await sleepWithRandomDelay(300)
                   await updateJobListData()
-                  tempTargetJobIndexToCheckDetail = getTempTargetJobIndexToCheckDetail()
+                  tempTargetJobIndexToCheckDetail = await getTempTargetJobIndexToCheckDetail()
                 }
 
                 if (tempTargetJobIndexToCheckDetail < 0 && hasReachLastPage) {
@@ -1376,14 +1524,22 @@ async function toRecommendPage (hooks) {
                       ...getJobMatchOptionsForDetailJob(selectedJobData)
                     }
                   )
-                  currentJobMatchScore = detailMatchResult.isScored
-                    ? detailMatchResult.score
+                  const llmDetailResult = getCachedLlmMatchScore(
+                    targetJobData.jobInfo.encryptId
+                  )
+                  const finalDetailMatchScore = detailMatchResult.isScored
+                    ? combineMatchScores(
+                        detailMatchResult.score,
+                        llmDetailResult?.score,
+                        jobMatchLlmWeight
+                      )
                     : null
+                  currentJobMatchScore = finalDetailMatchScore
                   if (
                     isJobMatchScoringEnabled &&
                     jobMatchMinScore > 0 &&
-                    detailMatchResult.isScored &&
-                    detailMatchResult.score < jobMatchMinScore
+                    finalDetailMatchScore !== null &&
+                    finalDetailMatchScore < jobMatchMinScore
                   ) {
                     blockJobNotSuit.add(targetJobData.jobInfo.encryptId)
                     await emitFunnelEvents([{
@@ -1396,10 +1552,15 @@ async function toRecommendPage (hooks) {
                       searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
                       filterConditionKey: activeFilterConditionKey ?? undefined,
                       filterConditionJson: activeFilterConditionJson ?? undefined,
-                      matchScore: detailMatchResult.score,
+                      matchScore: finalDetailMatchScore,
                       extInfo: JSON.stringify({
-                        reasons: detailMatchResult.reasons,
-                        components: detailMatchResult.components
+                        reasons: [
+                          ...(detailMatchResult.reasons ?? []),
+                          ...(llmDetailResult?.reasons ?? [])
+                        ],
+                        components: detailMatchResult.components,
+                        deterministicScore: detailMatchResult.score,
+                        llmScore: llmDetailResult?.score ?? null
                       })
                     }])
                     await saveTraversalCheckpoint(targetJobData.jobInfo.encryptId)

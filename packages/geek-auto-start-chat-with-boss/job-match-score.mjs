@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 export const DEFAULT_JOB_MATCH_WEIGHTS = {
   title: 25,
   skills: 35,
@@ -296,4 +298,34 @@ export function rankJobCandidates(
     return candidates
   }
   return candidates.sort((a, b) => b.score - a.score || a.index - b.index)
+}
+
+export function getResumeHash(profile) {
+  return createHash('sha256')
+    .update(String(profile?.text ?? ''))
+    .digest('hex')
+    .slice(0, 24)
+}
+
+export function getJobMatchInputHash(rawJob) {
+  const job = normalizeJob(rawJob)
+  return createHash('sha256')
+    .update(JSON.stringify({
+      jobName: job.jobName,
+      positionName: job.positionName,
+      description: job.description,
+      skills: job.skills
+    }))
+    .digest('hex')
+    .slice(0, 24)
+}
+
+export function combineMatchScores(deterministicScore, llmScore, llmWeight = 0.3) {
+  if (!Number.isFinite(llmScore)) {
+    return deterministicScore
+  }
+  const weight = Math.min(Math.max(Number(llmWeight) || 0, 0), 1)
+  return Math.round(
+    deterministicScore * (1 - weight) + Math.min(Math.max(llmScore, 0), 100) * weight
+  )
 }

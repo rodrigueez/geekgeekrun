@@ -120,6 +120,8 @@ const runAutoChat = async () => {
     jobTraversalStateLoaded: new AsyncSeriesHook(['encryptUserId', 'context']),
     jobFunnelEvents: new AsyncSeriesHook(['events']),
     jobTraversalCheckpointSaved: new AsyncSeriesHook(['payload']),
+    jobMatchScoreCacheGet: new AsyncSeriesHook(['query', 'context']),
+    jobMatchScoreCacheSet: new AsyncSeriesHook(['payload']),
     sageTimeEnter: new AsyncSeriesHook(['args']),
     sageTimeExit: new AsyncSeriesHook(['args'])
   }

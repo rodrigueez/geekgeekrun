@@ -22,6 +22,7 @@ import { LlmModelUsageRecord } from './entity/LlmModelUsageRecord'
 import { JobHireStatusRecord } from './entity/JobHireStatusRecord'
 import { JobFunnelEvent } from './entity/JobFunnelEvent'
 import { JobTraversalCheckpoint } from './entity/JobTraversalCheckpoint'
+import { JobMatchScore } from './entity/JobMatchScore'
 
 import {
   saveChatStartupRecord,
@@ -34,7 +35,9 @@ import {
   saveJobFunnelEvents,
   getRecentProcessedJobIds,
   getJobTraversalCheckpoints,
-  saveJobTraversalCheckpoint
+  saveJobTraversalCheckpoint,
+  getJobMatchScore,
+  saveJobMatchScore
 } from "./handlers";
 import { UpdateChatStartupLogTable1729182577167 } from "./migrations/1729182577167-UpdateChatStartupLogTable";
 import minimist from 'minimist'
@@ -49,6 +52,7 @@ import { AddQueryIndexes1767100000000 } from "./migrations/1767100000000-AddQuer
 import { ScrubLlmUsageSecrets1767100000001 } from "./migrations/1767100000001-ScrubLlmUsageSecrets";
 import { AddJobTraversalTracking1767200000000 } from "./migrations/1767200000000-AddJobTraversalTracking";
 import { AddUserToJobHireStatusRecord1767200000001 } from "./migrations/1767200000001-AddUserToJobHireStatusRecord";
+import { AddJobMatchScoreTable1767200000002 } from "./migrations/1767200000002-AddJobMatchScoreTable";
 import chunk from 'lodash/chunk'
 import * as typeorm from 'typeorm'
 
@@ -82,6 +86,7 @@ export function initDb(dbFilePath) {
       JobHireStatusRecord,
       JobFunnelEvent,
       JobTraversalCheckpoint,
+      JobMatchScore,
     ],
     migrations: [
       Init1000000000000,
@@ -94,7 +99,8 @@ export function initDb(dbFilePath) {
       AddQueryIndexes1767100000000,
       ScrubLlmUsageSecrets1767100000001,
       AddJobTraversalTracking1767200000000,
-      AddUserToJobHireStatusRecord1767200000001
+      AddUserToJobHireStatusRecord1767200000001,
+      AddJobMatchScoreTable1767200000002
     ],
     migrationsRun: true
   });
@@ -282,6 +288,16 @@ export default class SqlitePlugin {
     hooks.jobTraversalCheckpointSaved?.tapPromise("SqlitePlugin", async (payload) => {
       const ds = await this.initPromise;
       return saveJobTraversalCheckpoint(ds, payload);
+    });
+
+    hooks.jobMatchScoreCacheGet?.tapPromise("SqlitePlugin", async (query, context) => {
+      const ds = await this.initPromise;
+      context.score = await getJobMatchScore(ds, query);
+    });
+
+    hooks.jobMatchScoreCacheSet?.tapPromise("SqlitePlugin", async (payload) => {
+      const ds = await this.initPromise;
+      return saveJobMatchScore(ds, payload);
     });
   }
 }

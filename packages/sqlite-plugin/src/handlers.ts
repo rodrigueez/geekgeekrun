@@ -14,6 +14,7 @@ import { LlmModelUsageRecord } from "./entity/LlmModelUsageRecord";
 import { JobHireStatusRecord } from "./entity/JobHireStatusRecord";
 import { JobFunnelEvent } from "./entity/JobFunnelEvent";
 import { JobTraversalCheckpoint } from "./entity/JobTraversalCheckpoint";
+import { JobMatchScore } from "./entity/JobMatchScore";
 import { JobFunnelEventType } from "./enums";
 
 function getBossInfoIfIsEqual (savedOne, currentOne) {
@@ -543,6 +544,70 @@ export async function saveJobTraversalCheckpoint(
   record.filterConditionKey = payload.filterConditionKey
   record.lastProcessedJobId = payload.lastProcessedJobId
   record.updatedAt = new Date()
+  await repo.save(record)
+  return record
+}
+
+export async function getJobMatchScore(
+  ds: DataSource,
+  query: {
+    encryptCurrentUserId: string
+    encryptJobId: string
+    resumeHash: string
+    modelId: string
+    scorerType: number
+    inputHash?: string
+  }
+) {
+  const repo = ds.getRepository(JobMatchScore)
+  return repo.findOne({
+    where: {
+      encryptCurrentUserId: query.encryptCurrentUserId,
+      encryptJobId: query.encryptJobId,
+      resumeHash: query.resumeHash,
+      modelId: query.modelId,
+      scorerType: query.scorerType as any
+    }
+  })
+}
+
+export async function saveJobMatchScore(
+  ds: DataSource,
+  payload: {
+    encryptCurrentUserId: string
+    encryptJobId: string
+    resumeHash: string
+    modelId: string
+    scorerType: number
+    score: number
+    reasons?: string[]
+    inputHash?: string
+  }
+) {
+  const repo = ds.getRepository(JobMatchScore)
+  let record = await repo.findOne({
+    where: {
+      encryptCurrentUserId: payload.encryptCurrentUserId,
+      encryptJobId: payload.encryptJobId,
+      resumeHash: payload.resumeHash,
+      modelId: payload.modelId,
+      scorerType: payload.scorerType as any
+    }
+  })
+  if (!record) {
+    record = new JobMatchScore()
+    record.encryptCurrentUserId = payload.encryptCurrentUserId
+    record.encryptJobId = payload.encryptJobId
+    record.resumeHash = payload.resumeHash
+    record.modelId = payload.modelId
+    record.scorerType = payload.scorerType as any
+  }
+  record.score = payload.score
+  record.reasonsJson = payload.reasons?.length
+    ? JSON.stringify(payload.reasons)
+    : undefined
+  record.inputHash = payload.inputHash
+  record.scoredAt = new Date()
   await repo.save(record)
   return record
 }

@@ -326,6 +326,41 @@
                   />
                 </label>
               </div>
+              <div mt12px>
+                <el-checkbox v-model="formContent.jobMatchLlmEnabled">
+                  使用已配置的大语言模型做语义评分
+                </el-checkbox>
+                <span ml8px font-size-12px color-gray>
+                  仅对规则评分靠前的职位调用，建议使用本地模型
+                </span>
+              </div>
+              <div v-if="formContent.jobMatchLlmEnabled" mt8px font-size-12px>
+                每个列表最多评估
+                <el-input-number
+                  v-model="formContent.jobMatchLlmTopN"
+                  inline-block
+                  w-100px
+                  :min="1"
+                  :max="20"
+                  :step="1"
+                  step-strictly
+                  :precision="0"
+                  controls-position="right"
+                />
+                个职位，单次运行最多调用
+                <el-input-number
+                  v-model="formContent.jobMatchLlmMaxCallsPerRun"
+                  inline-block
+                  w-110px
+                  :min="1"
+                  :max="500"
+                  :step="5"
+                  step-strictly
+                  :precision="0"
+                  controls-position="right"
+                />
+                次模型
+              </div>
             </div>
           </el-card>
           <!-- <el-form-item
@@ -1911,6 +1946,9 @@ const formContent = ref({
     company: 10,
     activity: 5
   },
+  jobMatchLlmEnabled: false,
+  jobMatchLlmTopN: 3,
+  jobMatchLlmMaxCallsPerRun: 20,
   __jobSourceList: formatJobSourceConfigToFormValue([
     {
       type: 'expect',
@@ -2077,6 +2115,12 @@ electron.ipcRenderer.invoke('fetch-config-file-content').then((res) => {
     activity: 5,
     ...(res.config['boss.json'].jobMatchWeights ?? {})
   }
+  formContent.value.jobMatchLlmEnabled =
+    res.config['boss.json'].jobMatchLlmEnabled ?? false
+  formContent.value.jobMatchLlmTopN =
+    Number(res.config['boss.json'].jobMatchLlmTopN) || 3
+  formContent.value.jobMatchLlmMaxCallsPerRun =
+    Number(res.config['boss.json'].jobMatchLlmMaxCallsPerRun) || 20
   formContent.value.__jobSourceList = formatJobSourceConfigToFormValue(
     res.config['boss.json'].jobSourceList || []
   )
