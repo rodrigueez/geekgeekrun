@@ -1509,7 +1509,24 @@ async function toRecommendPage (hooks) {
 
                   await sleepWithRandomDelay(200)
 
-                  if (tempTargetJobIndexToCheckDetail === 0) {
+                  const targetListJobForDetail =
+                    jobListData[tempTargetJobIndexToCheckDetail]
+                  let shouldClickTargetJob = tempTargetJobIndexToCheckDetail !== 0
+                  if (!shouldClickTargetJob) {
+                    // Boss 会自动展示第一个职位的详情，但上一轮标记/跳过后，
+                    // 详情面板可能还停留在别的职位上，这时不能直接复用。
+                    const displayedJobDetail = await getJobDetail(page)
+                    const displayedJobId = displayedJobDetail?.jobInfo?.encryptId
+                    const targetJobId = targetListJobForDetail?.encryptJobId
+                    if (!targetJobId || displayedJobId !== targetJobId) {
+                      shouldClickTargetJob = true
+                      console.log('detail pane is stale, click target job again', {
+                        displayedJobId,
+                        targetJobId
+                      })
+                    }
+                  }
+                  if (!shouldClickTargetJob) {
                   } else {
                     const recommendJobItemList = await recommendJobListElProxy.$$('ul.rec-job-list li.job-card-box')
                     const targetJobElProxy = recommendJobItemList[tempTargetJobIndexToCheckDetail]
@@ -2141,8 +2158,23 @@ async function toRecommendPage (hooks) {
             continue findInCurrentFilterCondition
           }
 
+          if (startChatButtonInnerHTML !== '立即沟通') {
+            // 等待期间按钮可能已经变成“继续沟通”，此时点击会跳到聊天页，
+            // 后面的好友请求响应永远等不到。
+            console.log('start chat button changed, skip target job', {
+              startChatButtonInnerHTML,
+              encryptJobId: targetJobData.jobInfo.encryptId
+            })
+            blockBossNotNewChat.add(targetJobData.jobInfo.encryptUserId)
+            continue findInCurrentFilterCondition
+          }
+
           await hooks.newChatWillStartup?.promise(targetJobData)
           const startChatButtonProxy = await getStartChatButton(page)
+          if (!startChatButtonProxy) {
+            blockBossNotNewChat.add(targetJobData.jobInfo.encryptUserId)
+            continue findInCurrentFilterCondition
+          }
           await sleep(500)
           //#region click the chat button
           await startChatButtonProxy.click()
