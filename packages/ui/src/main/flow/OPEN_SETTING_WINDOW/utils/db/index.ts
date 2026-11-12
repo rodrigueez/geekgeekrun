@@ -109,3 +109,71 @@ export const saveAndGetCurrentRunRecord = async () => {
   })
   return res
 }
+
+export const getJobCandidateList = async ({
+  pageNo,
+  pageSize,
+  statusList,
+  profileId
+}: {
+  pageNo?: number
+  pageSize?: number
+  statusList?: number[]
+  profileId?: string
+} = {}) => {
+  return await createWorkerPromise({
+    type: 'getJobCandidateList',
+    pageNo,
+    pageSize,
+    statusList,
+    profileId
+  })
+}
+
+export const getJobCandidatesByStatus = async ({
+  statusList,
+  profileId,
+  limit
+}: {
+  statusList?: number[]
+  profileId?: string
+  limit?: number
+} = {}) => {
+  return await createWorkerPromise({
+    type: 'getJobCandidatesByStatus',
+    statusList,
+    profileId,
+    limit
+  })
+}
+
+export const setJobCandidateStatus = async ({
+  encryptJobId,
+  profileId,
+  status
+}: {
+  encryptJobId: string
+  profileId?: string
+  status: number
+}) => {
+  return await createWorkerPromise({
+    type: 'setJobCandidateStatus',
+    encryptJobId,
+    profileId,
+    status
+  })
+}
+
+export const recordCandidateChat = async ({
+  encryptJobId,
+  encryptCurrentUserId
+}: {
+  encryptJobId: string
+  encryptCurrentUserId: string
+}) => {
+  return await createWorkerPromise({
+    type: 'recordCandidateChat',
+    encryptJobId,
+    encryptCurrentUserId
+  })
+}

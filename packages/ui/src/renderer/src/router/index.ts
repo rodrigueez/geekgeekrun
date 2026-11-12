@@ -121,6 +121,13 @@ const routes: Array<RouteRecordRaw> = [
         }
       },
       {
+        path: 'JobCandidateList',
+        component: () => import('@renderer/page/MainLayout/JobCandidateList.vue'),
+        meta: {
+          title: '待聊清单'
+        }
+      },
+      {
         path: 'BossLibrary',
         component: () => import('@renderer/page/MainLayout/BossLibrary.vue'),
         meta: {

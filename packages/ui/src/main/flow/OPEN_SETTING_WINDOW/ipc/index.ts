@@ -18,8 +18,11 @@ import {
   getCompanyLibrary,
   getJobLibrary,
   getJobHistoryByEncryptId,
-  getMarkAsNotSuitRecord
+  getMarkAsNotSuitRecord,
+  getJobCandidateList,
+  setJobCandidateStatus
 } from '../utils/db/index'
+import { chatWithCandidates } from '../../../features/chat-with-candidates'
 import { PageReq } from '../../../../common/types/pagination'
 import { pipeWriteRegardlessError } from '../../utils/pipe'
 import { WriteStream } from 'node:fs'
@@ -400,6 +403,39 @@ export default function initIpc() {
   ipcMain.handle('get-company-library', async (_ev, payload: PageReq) => {
     const a = await getCompanyLibrary(payload)
     return a
+  })
+
+  ipcMain.handle('get-job-candidate-list', async (_ev, payload) => {
+    const activeProfile = await getActiveJobSearchProfileSummary().catch(() => null)
+    return await getJobCandidateList({
+      ...payload,
+      profileId: payload?.profileId || activeProfile?.id || ''
+    })
+  })
+  ipcMain.handle('set-job-candidate-status', async (_ev, payload) => {
+    const activeProfile = await getActiveJobSearchProfileSummary().catch(() => null)
+    return await setJobCandidateStatus({
+      ...payload,
+      profileId: payload?.profileId || activeProfile?.id || ''
+    })
+  })
+
+  let candidateChatRunning = false
+  ipcMain.handle('start-chat-with-candidates', async (_ev, payload) => {
+    if (candidateChatRunning) {
+      return { ok: false, reason: 'ALREADY_RUNNING' }
+    }
+    candidateChatRunning = true
+    try {
+      const activeProfile = await getActiveJobSearchProfileSummary().catch(() => null)
+      return await chatWithCandidates({
+        batchSize: Number(payload?.batchSize) || 10,
+        dailyLimit: Number(payload?.dailyLimit) || 20,
+        profileId: activeProfile?.id ?? ''
+      })
+    } finally {
+      candidateChatRunning = false
+    }
   })
 
   let subProcessOfOpenBossSiteDefer: Deferred<ChildProcess> | null = null

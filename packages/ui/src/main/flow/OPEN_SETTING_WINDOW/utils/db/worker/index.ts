@@ -12,6 +12,10 @@ import { measureExecutionTime } from '../../../../../../common/utils/performance
 import { PageReq, PagedRes } from '../../../../../../common/types/pagination'
 import { JobInfoChangeLog } from '@geekgeekrun/sqlite-plugin/dist/entity/JobInfoChangeLog'
 import { AutoStartChatRunRecord } from '@geekgeekrun/sqlite-plugin/dist/entity/AutoStartChatRunRecord'
+import { JobCandidate } from '@geekgeekrun/sqlite-plugin/dist/entity/JobCandidate'
+import { ChatStartupLog, ChatStartupFrom } from '@geekgeekrun/sqlite-plugin/dist/entity/ChatStartupLog'
+import { JobCandidateStatus } from '@geekgeekrun/sqlite-plugin/dist/enums'
+import { In } from 'typeorm'
 
 const dbInitPromise = initDb(getPublicDbFilePath())
 let dataSource: DataSource | null = null
@@ -169,6 +173,111 @@ const payloadHandler = {
     const autoStartChatRunRecordRepository = dataSource!.getRepository(AutoStartChatRunRecord)
     const result = await autoStartChatRunRecordRepository.save(autoStartChatRunRecord)
     return result
+  },
+  async getJobCandidateList({
+    pageNo = 1,
+    pageSize = 20,
+    statusList = [],
+    profileId = ''
+  }: {
+    pageNo?: number
+    pageSize?: number
+    statusList?: JobCandidateStatus[]
+    profileId?: string
+  } = {}): Promise<PagedRes<JobCandidate>> {
+    const repository = dataSource!.getRepository(JobCandidate)
+    const where: Record<string, unknown> = {}
+    if (profileId) {
+      where.profileId = profileId
+    }
+    if (statusList?.length) {
+      where.status = In(statusList)
+    }
+    const [data, totalItemCount] = await repository.findAndCount({
+      where,
+      order: {
+        matchScore: 'DESC',
+        collectedAt: 'DESC'
+      },
+      skip: (Math.max(pageNo, 1) - 1) * pageSize,
+      take: pageSize
+    })
+    return {
+      data,
+      pageNo,
+      totalItemCount
+    }
+  },
+  async getJobCandidatesByStatus({
+    statusList = [],
+    profileId = '',
+    limit = 50
+  }: {
+    statusList?: JobCandidateStatus[]
+    profileId?: string
+    limit?: number
+  } = {}): Promise<JobCandidate[]> {
+    const repository = dataSource!.getRepository(JobCandidate)
+    const where: Record<string, unknown> = {}
+    if (profileId) {
+      where.profileId = profileId
+    }
+    if (statusList?.length) {
+      where.status = In(statusList)
+    }
+    return await repository.find({
+      where,
+      order: {
+        matchScore: 'DESC',
+        collectedAt: 'DESC'
+      },
+      take: Math.min(Math.max(limit, 1), 200)
+    })
+  },
+  async setJobCandidateStatus({
+    encryptJobId,
+    profileId = '',
+    status
+  }: {
+    encryptJobId: string
+    profileId?: string
+    status: JobCandidateStatus
+  }) {
+    const repository = dataSource!.getRepository(JobCandidate)
+    const existing = await repository.findOne({
+      where: {
+        encryptJobId,
+        profileId
+      }
+    })
+    if (!existing) {
+      return null
+    }
+    existing.status = status
+    existing.statusUpdatedAt = new Date()
+    if (status === JobCandidateStatus.CHATTING && !existing.chatStartedAt) {
+      existing.chatStartedAt = new Date()
+    }
+    await repository.save(existing)
+    return existing
+  },
+  async recordCandidateChat({
+    encryptJobId,
+    encryptCurrentUserId
+  }: {
+    encryptJobId: string
+    encryptCurrentUserId: string
+  }) {
+    if (!encryptJobId || !encryptCurrentUserId) {
+      return null
+    }
+    const repository = dataSource!.getRepository(ChatStartupLog)
+    const record = new ChatStartupLog()
+    record.encryptJobId = encryptJobId
+    record.encryptCurrentUserId = encryptCurrentUserId
+    record.date = new Date()
+    record.chatStartupFrom = ChatStartupFrom.ManuallyFromRecommendList
+    return await repository.save(record)
   }
 }
 

@@ -253,6 +253,19 @@
           </el-card>
           <el-card class="config-section">
             <el-form-item mb0>
+              <div font-size-16px>求职类型</div>
+            </el-form-item>
+            <div font-size-12px mb8px>
+              直接按职位列表数据过滤，不符合的职位不会打开详情。不勾选表示不限。
+            </div>
+            <el-checkbox-group v-model="formContent.jobTypeList">
+              <el-checkbox :value="0">全职</el-checkbox>
+              <el-checkbox :value="4">实习</el-checkbox>
+              <el-checkbox :value="6">兼职</el-checkbox>
+            </el-checkbox-group>
+          </el-card>
+          <el-card class="config-section">
+            <el-form-item mb0>
               <div font-size-16px>职位匹配评分</div>
             </el-form-item>
             <div font-size-12px mb8px>
@@ -1897,6 +1910,22 @@
       <div class="bg-#f8f8f8 pb10px pt10px">
         <div
           :style="{
+            maxWidth: '1000px',
+            margin: '0 auto',
+            paddingLeft: '20px',
+            paddingRight: 'calc(20px + 16px)'
+          }"
+          mb10px
+        >
+          <el-checkbox v-model="formContent.jobCollectionOnly" font-size-14px>
+            只采集，不开聊
+          </el-checkbox>
+          <div font-size-12px color-gray>
+            开启后只把匹配的职位写入「待聊清单」，不会发起任何沟通，也不会在 BOSS 上标记。
+          </div>
+        </div>
+        <div
+          :style="{
             display: 'flex',
             justifyContent: 'end',
             maxWidth: '1000px',
@@ -2071,6 +2100,8 @@ const formContent = ref({
   isSkipEmptyConditionForCombineRecommendJobFilter: true,
   maxRecommendJobFilterCombinations: 500,
   jobMatchEnabled: true,
+  jobTypeList: [] as number[],
+  jobCollectionOnly: false,
   jobMatchMinScore: 0,
   jobMatchWeights: {
     title: 25,
@@ -2247,6 +2278,10 @@ electron.ipcRenderer.invoke('fetch-config-file-content').then((res) => {
   formContent.value.isSkipEmptyConditionForCombineRecommendJobFilter =
     res.config['boss.json'].isSkipEmptyConditionForCombineRecommendJobFilter ?? false
   formContent.value.jobMatchEnabled = res.config['boss.json'].jobMatchEnabled ?? true
+  formContent.value.jobTypeList = Array.isArray(res.config['boss.json'].jobTypeList)
+    ? res.config['boss.json'].jobTypeList.map((item) => Number(item))
+    : []
+  formContent.value.jobCollectionOnly = res.config['boss.json'].jobCollectionOnly === true
   formContent.value.jobMatchMinScore = Number(res.config['boss.json'].jobMatchMinScore) || 0
   formContent.value.jobMatchWeights = {
     title: 25,
