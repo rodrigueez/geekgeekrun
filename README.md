@@ -128,6 +128,21 @@ BOSS不明原因已读不回？简历就是投不出去？
     - Linux（x86_64）：支持包含默认桌面环境的 Ubuntu 20.04；暂未测试其它 Linux 发行版及桌面环境
     - macOS（Apple Silicon、x86_64）：支持 Sonoma 14.0；暂未测试更早前的操作系统
 
+## 本地开发
+UI 使用 electron-vite：修改渲染进程代码会自动 HMR，修改主进程代码会自动重启 Electron。
+
+```sh
+pnpm --dir packages/ui run dev
+```
+
+如果本机已经安装了 GeekGeekRun，正在运行的打包版会占用单实例锁；此时用隔离配置启动：
+
+```sh
+pnpm --dir packages/ui run dev:isolated
+```
+
+隔离版会把自己的配置、数据库和 Electron 用户数据放在 `~/.geekgeekrun-dev/`，不会动你现有的 `~/.geekgeekrun`。
+
 ## 安装方式
 - Windows
     1. 打开 https://github.com/geekgeekrun/geekgeekrun/releases ，下载最新发行版安装包（文件名后缀`.exe`）

@@ -3,9 +3,13 @@ import minimist from 'minimist'
 import { runCommon } from './features/run-common'
 import { launchDaemon } from './flow/OPEN_SETTING_WINDOW/launch-daemon'
 import { app } from 'electron'
+import path from 'node:path'
 
 const isUiDev = process.env.NODE_ENV === 'development'
 const enableLogToFile = process.env.GEEKGEEKRUN_ENABLE_LOG_TO_FILE === String(1)
+if (isUiDev && process.env.GEEKGEEKRUN_DEV_USER_DATA_DIR) {
+  app.setPath('userData', path.resolve(process.env.GEEKGEEKRUN_DEV_USER_DATA_DIR))
+}
 if (isUiDev || enableLogToFile) {
   overrideConsole()
 }
