@@ -9,6 +9,78 @@ import {
 } from '@geekgeekrun/geek-auto-start-chat-with-boss/runtime-file-utils.mjs'
 
 const runRecordId = minimist(process.argv.slice(2))['run-record-id'] ?? null
+
+const VOLATILE_COOKIE_NAMES = ['__zp_stoken__']
+const SESSION_PROBE_URL = 'https://www.zhipin.com/web/geek/jobs'
+
+async function fetchUserInfo(page) {
+  return await page.evaluate(async () => {
+    const response = await fetch('/wapi/zpuser/wap/getUserInfo.json', {
+      credentials: 'include',
+      headers: {
+        accept: 'application/json, text/plain, */*'
+      }
+    })
+    return await response.json()
+  })
+}
+
+async function persistCurrentStorage(page) {
+  try {
+    const [cookies, localStorage] = await Promise.all([
+      page.cookies(),
+      page
+        .evaluate(() => JSON.stringify(window.localStorage))
+        .then((text) => JSON.parse(text))
+    ])
+    await Promise.all([
+      writeStorageFile('boss-cookies.json', cookies),
+      writeStorageFile('boss-local-storage.json', localStorage)
+    ])
+  } catch (err) {
+    console.log('persist storage failed', err)
+  }
+}
+
+async function refreshSessionWithExistingCookies(browser) {
+  if (!browser) {
+    return null
+  }
+  try {
+    const pages = await browser.pages()
+    const page =
+      pages.find((item) => item.url().startsWith('https://www.zhipin.com')) ?? pages[0]
+    if (!page) {
+      return null
+    }
+    const cookies = await page.cookies('https://www.zhipin.com')
+    if (!cookies.length) {
+      return null
+    }
+    for (const name of VOLATILE_COOKIE_NAMES) {
+      if (cookies.some((cookie) => cookie.name === name)) {
+        await page.deleteCookie({ name, url: 'https://www.zhipin.com' })
+      }
+    }
+    await page.goto(SESSION_PROBE_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 45000
+    })
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await sleep(attempt === 0 ? 1500 : 2000)
+      const userInfo = await fetchUserInfo(page)
+      if (userInfo?.code === 0) {
+        await persistCurrentStorage(page)
+        return userInfo
+      }
+    }
+    return null
+  } catch (err) {
+    console.log('refresh session with existing cookies failed', err)
+    return null
+  }
+}
+
 export class CookieInvalidHandlePlugin {
   apply(hooks) {
     hooks.cookieWillSet.tapPromise('CookieInvalidHandlePlugin', async ({ cookies, browser } = {}) => {
@@ -76,6 +148,23 @@ export class CookieInvalidHandlePlugin {
     })
     hooks.userInfoResponse.tapPromise('CookieInvalidHandlePlugin', async ({ userInfoResponse, browser } = {}) => {
       if (userInfoResponse.code === 0) {
+        sendToDaemon({
+          type: 'worker-to-gui-message',
+          workerId: process.env.GEEKGEEKRUND_WORKER_ID,
+          data: {
+            type: 'prerequisite-step-by-step-check',
+            step: {
+              id: 'login-status-check',
+              status: 'fulfilled'
+            },
+            runRecordId
+          }
+        })
+        return
+      }
+      const refreshedUserInfo = await refreshSessionWithExistingCookies(browser)
+      if (refreshedUserInfo?.code === 0) {
+        Object.assign(userInfoResponse, refreshedUserInfo)
         sendToDaemon({
           type: 'worker-to-gui-message',
           workerId: process.env.GEEKGEEKRUND_WORKER_ID,
