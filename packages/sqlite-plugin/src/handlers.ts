@@ -517,6 +517,38 @@ export async function getJobTraversalCheckpoints(
   })
 }
 
+export async function getJobSourcePerformanceStats(
+  ds: DataSource,
+  encryptCurrentUserId: string,
+  days = 30
+) {
+  if (!encryptCurrentUserId) {
+    return []
+  }
+  return ds.query(
+    `SELECT
+      "sourceKey" AS "sourceKey",
+      "filterConditionKey" AS "filterConditionKey",
+      SUM(CASE WHEN "eventType" = ? THEN 1 ELSE 0 END) AS "views",
+      SUM(CASE WHEN "eventType" = ? THEN 1 ELSE 0 END) AS "chats",
+      SUM(CASE WHEN "eventType" = ? THEN 1 ELSE 0 END) AS "replies",
+      SUM(CASE WHEN "eventType" = ? THEN 1 ELSE 0 END) AS "interviews"
+    FROM "job_funnel_event"
+    WHERE "encryptCurrentUserId" = ?
+      AND "eventDate" >= ?
+      AND "sourceKey" IS NOT NULL
+    GROUP BY "sourceKey", "filterConditionKey"`,
+    [
+      JobFunnelEventType.DETAIL_VIEWED,
+      JobFunnelEventType.CHAT_STARTED,
+      JobFunnelEventType.REPLY_RECEIVED,
+      JobFunnelEventType.INTERVIEW_SCHEDULED,
+      encryptCurrentUserId,
+      new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    ]
+  )
+}
+
 export async function saveJobTraversalCheckpoint(
   ds: DataSource,
   payload: {

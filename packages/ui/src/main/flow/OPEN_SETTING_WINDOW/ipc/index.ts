@@ -221,6 +221,13 @@ export default function initIpc() {
     if (hasOwn(payload, 'jobMatchLlmMaxCallsPerRun')) {
       bossConfig.jobMatchLlmMaxCallsPerRun = payload.jobMatchLlmMaxCallsPerRun
     }
+    if (hasOwn(payload, 'jobSourcePerformanceEnabled')) {
+      bossConfig.jobSourcePerformanceEnabled = payload.jobSourcePerformanceEnabled
+    }
+    if (hasOwn(payload, 'jobSourcePerformanceMinChats')) {
+      bossConfig.jobSourcePerformanceMinChats =
+        payload.jobSourcePerformanceMinChats
+    }
     if (hasOwn(payload, 'jobSourceList')) {
       bossConfig.jobSourceList = payload.jobSourceList
     }

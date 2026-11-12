@@ -24,6 +24,8 @@
   "jobMatchLlmEnabled": false,
   "jobMatchLlmTopN": 3,
   "jobMatchLlmMaxCallsPerRun": 20,
+  "jobSourcePerformanceEnabled": true,
+  "jobSourcePerformanceMinChats": 10,
   "expectJobRegExpStr": "",
   "expectJobNameRegExpStr": "",
   "expectJobTypeRegExpStr": "",

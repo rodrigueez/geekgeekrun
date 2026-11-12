@@ -361,6 +361,26 @@
                 />
                 次模型
               </div>
+              <div mt12px>
+                <el-checkbox v-model="formContent.jobSourcePerformanceEnabled">
+                  根据开聊和回复转化率自动调整来源、筛选条件顺序
+                </el-checkbox>
+                <span ml8px font-size-12px color-gray>
+                  至少累计
+                </span>
+                <el-input-number
+                  v-model="formContent.jobSourcePerformanceMinChats"
+                  inline-block
+                  w-100px
+                  :min="1"
+                  :max="1000"
+                  :step="1"
+                  step-strictly
+                  :precision="0"
+                  controls-position="right"
+                />
+                <span font-size-12px color-gray>次开聊后才参与排序</span>
+              </div>
             </div>
           </el-card>
           <!-- <el-form-item
@@ -1949,6 +1969,8 @@ const formContent = ref({
   jobMatchLlmEnabled: false,
   jobMatchLlmTopN: 3,
   jobMatchLlmMaxCallsPerRun: 20,
+  jobSourcePerformanceEnabled: true,
+  jobSourcePerformanceMinChats: 10,
   __jobSourceList: formatJobSourceConfigToFormValue([
     {
       type: 'expect',
@@ -2121,6 +2143,10 @@ electron.ipcRenderer.invoke('fetch-config-file-content').then((res) => {
     Number(res.config['boss.json'].jobMatchLlmTopN) || 3
   formContent.value.jobMatchLlmMaxCallsPerRun =
     Number(res.config['boss.json'].jobMatchLlmMaxCallsPerRun) || 20
+  formContent.value.jobSourcePerformanceEnabled =
+    res.config['boss.json'].jobSourcePerformanceEnabled ?? true
+  formContent.value.jobSourcePerformanceMinChats =
+    Number(res.config['boss.json'].jobSourcePerformanceMinChats) || 10
   formContent.value.__jobSourceList = formatJobSourceConfigToFormValue(
     res.config['boss.json'].jobSourceList || []
   )

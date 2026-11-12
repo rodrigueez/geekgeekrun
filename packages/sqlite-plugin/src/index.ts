@@ -36,6 +36,7 @@ import {
   getRecentProcessedJobIds,
   getJobTraversalCheckpoints,
   saveJobTraversalCheckpoint,
+  getJobSourcePerformanceStats,
   getJobMatchScore,
   saveJobMatchScore
 } from "./handlers";
@@ -277,6 +278,11 @@ export default class SqlitePlugin {
         context.processedJobIds = new Set(
           await getRecentProcessedJobIds(ds, encryptUserId, 7) ?? []
         );
+        context.performanceRows = await getJobSourcePerformanceStats(
+          ds,
+          encryptUserId,
+          30
+        ) ?? [];
       }
     );
 

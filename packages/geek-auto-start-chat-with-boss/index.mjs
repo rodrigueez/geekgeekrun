@@ -38,6 +38,11 @@ import {
   pickJobMatchLlmConfig,
   requestJobMatchScore
 } from './job-match-llm.mjs'
+import {
+  buildPerformanceMaps,
+  sortSourcesByPerformance,
+  sortFiltersByPerformance
+} from './job-source-performance.mjs'
 import { default as jobFilterConditions } from './internal-config/job-filter-conditions-20241002.json'
 import { default as rawIndustryFilterExemption } from './internal-config/job-filter-industry-filter-exemption-20241002.json'
 import { ChatStartupFrom } from '@geekgeekrun/sqlite-plugin/dist/entity/ChatStartupLog'
@@ -194,6 +199,15 @@ const isJobMatchLlmScoringEnabled =
   jobMatchLlmMaxCallsPerRun > 0 &&
   Boolean(jobMatchLlmConfig)
 const resumeHash = getResumeHash(resumeProfile)
+const jobSourcePerformanceEnabled =
+  readConfigFile('boss.json').jobSourcePerformanceEnabled ?? true
+const jobSourcePerformanceMinChats = (() => {
+  const value = Number(readConfigFile('boss.json').jobSourcePerformanceMinChats)
+  if (!Number.isFinite(value) || value < 1) {
+    return 10
+  }
+  return Math.min(Math.floor(value), 1000)
+})()
 if (!checkAnyCombineBossRecommendFilterHasCondition(anyCombineRecommendJobFilter)) {
   isSkipEmptyConditionForCombineRecommendJobFilter = false
 }
@@ -839,7 +853,8 @@ async function toRecommendPage (hooks) {
   const traversalState = {
     encryptUserId: userInfoResponse?.zpData?.encryptUserId ?? null,
     checkpoints: [],
-    processedJobIds: new Set()
+    processedJobIds: new Set(),
+    performanceRows: []
   }
   await hooks.jobTraversalStateLoaded?.promise?.(
     traversalState.encryptUserId,
@@ -939,13 +954,21 @@ async function toRecommendPage (hooks) {
     source.sourceKey = getJobSourceKey(source, index)
   })
 
+  const performanceMaps = jobSourcePerformanceEnabled
+    ? buildPerformanceMaps(traversalState.performanceRows, {
+        minChats: jobSourcePerformanceMinChats
+      })
+    : null
   const checkpointSourceKey = traversalState.checkpoints?.[0]?.sourceKey
   const checkpointSource = findCheckpointBySourceKey(
     traversalState.checkpoints,
     checkpointSourceKey
   )
+  const performanceOrderedSourceList = performanceMaps
+    ? sortSourcesByPerformance(computedSourceList, performanceMaps)
+    : computedSourceList
   const orderedSourceList = rotateListToKey(
-    computedSourceList,
+    performanceOrderedSourceList,
     checkpointSource ? checkpointSource.sourceKey : null,
     (source) => source.sourceKey
   )
@@ -1113,6 +1136,14 @@ async function toRecommendPage (hooks) {
                 !isSkipEmptyConditionForCombineRecommendJobFilter,
               maxCombinations: maxRecommendJobFilterCombinations
             })
+    if (performanceMaps) {
+      filterConditions = sortFiltersByPerformance(
+        filterConditions,
+        computedSourceList[currentSourceIndex]?.sourceKey,
+        performanceMaps,
+        getFilterConditionKey
+      )
+    }
     filterConditions = rotateListToKey(
       filterConditions,
       sourceCheckpoint?.filterConditionKey ?? null,
