@@ -141,6 +141,8 @@ pnpm --dir packages/ui run dev
 pnpm --dir packages/ui run dev:isolated
 ```
 
+macOS 也可以直接双击仓库根目录的 `dev-macos.command`。
+
 隔离版会把自己的配置、数据库和 Electron 用户数据放在 `~/.geekgeekrun-dev/`，不会动你现有的 `~/.geekgeekrun`。
 
 ## 安装方式
