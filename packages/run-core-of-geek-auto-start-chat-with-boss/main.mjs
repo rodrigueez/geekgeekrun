@@ -70,6 +70,7 @@ const main = async () => {
     jobMatchScoreCacheSet: new AsyncSeriesHook(['payload']),
     jobSemanticFilterCacheGet: new AsyncSeriesHook(['query', 'context']),
     jobSemanticFilterCacheSet: new AsyncSeriesHook(['payload']),
+    jobCandidateCollected: new AsyncSeriesHook(['record']),
     sageTimeEnter: new AsyncSeriesHook(['args']),
     sageTimeExit: new AsyncSeriesHook(['args'])
   }

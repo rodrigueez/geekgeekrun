@@ -26,6 +26,8 @@
   "jobMatchLlmMaxCallsPerRun": 20,
   "jobSourcePerformanceEnabled": true,
   "jobSourcePerformanceMinChats": 10,
+  "jobTypeList": [],
+  "jobCollectionOnly": false,
   "jobSemanticFilterEnabled": false,
   "jobSemanticFilterCriteria": "",
   "jobSemanticFilterListPrecheck": true,

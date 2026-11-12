@@ -24,6 +24,7 @@ import { JobFunnelEvent } from './entity/JobFunnelEvent'
 import { JobTraversalCheckpoint } from './entity/JobTraversalCheckpoint'
 import { JobMatchScore } from './entity/JobMatchScore'
 import { JobSemanticFilterRecord } from './entity/JobSemanticFilterRecord'
+import { JobCandidate } from './entity/JobCandidate'
 
 import {
   saveChatStartupRecord,
@@ -41,7 +42,11 @@ import {
   getJobMatchScore,
   saveJobMatchScore,
   getJobSemanticFilterResult,
-  saveJobSemanticFilterResult
+  saveJobSemanticFilterResult,
+  saveJobCandidate,
+  listJobCandidates,
+  updateJobCandidateStatus,
+  getJobCandidate
 } from "./handlers";
 import { UpdateChatStartupLogTable1729182577167 } from "./migrations/1729182577167-UpdateChatStartupLogTable";
 import minimist from 'minimist'
@@ -58,6 +63,7 @@ import { AddJobTraversalTracking1767200000000 } from "./migrations/1767200000000
 import { AddUserToJobHireStatusRecord1767200000001 } from "./migrations/1767200000001-AddUserToJobHireStatusRecord";
 import { AddJobMatchScoreTable1767200000002 } from "./migrations/1767200000002-AddJobMatchScoreTable";
 import { AddJobSemanticFilterRecordTable1767200000003 } from "./migrations/1767200000003-AddJobSemanticFilterRecordTable";
+import { AddJobCandidateTable1767300000000 } from "./migrations/1767300000000-AddJobCandidateTable";
 import chunk from 'lodash/chunk'
 import * as typeorm from 'typeorm'
 
@@ -93,6 +99,7 @@ export function initDb(dbFilePath) {
       JobTraversalCheckpoint,
       JobMatchScore,
       JobSemanticFilterRecord,
+      JobCandidate,
     ],
     migrations: [
       Init1000000000000,
@@ -107,7 +114,8 @@ export function initDb(dbFilePath) {
       AddJobTraversalTracking1767200000000,
       AddUserToJobHireStatusRecord1767200000001,
       AddJobMatchScoreTable1767200000002,
-      AddJobSemanticFilterRecordTable1767200000003
+      AddJobSemanticFilterRecordTable1767200000003,
+      AddJobCandidateTable1767300000000
     ],
     migrationsRun: true
   });
@@ -320,6 +328,11 @@ export default class SqlitePlugin {
     hooks.jobSemanticFilterCacheSet?.tapPromise("SqlitePlugin", async (payload) => {
       const ds = await this.initPromise;
       return saveJobSemanticFilterResult(ds, payload);
+    });
+
+    hooks.jobCandidateCollected?.tapPromise("SqlitePlugin", async (record) => {
+      const ds = await this.initPromise;
+      return await saveJobCandidate(ds, record);
     });
   }
 }

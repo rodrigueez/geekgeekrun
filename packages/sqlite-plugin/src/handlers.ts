@@ -16,7 +16,8 @@ import { JobFunnelEvent } from "./entity/JobFunnelEvent";
 import { JobTraversalCheckpoint } from "./entity/JobTraversalCheckpoint";
 import { JobMatchScore } from "./entity/JobMatchScore";
 import { JobSemanticFilterRecord } from "./entity/JobSemanticFilterRecord";
-import { JobFunnelEventType } from "./enums";
+import { JobCandidate } from "./entity/JobCandidate";
+import { JobCandidateStatus, JobFunnelEventType } from "./enums";
 
 function getBossInfoIfIsEqual (savedOne, currentOne) {
   if (savedOne === currentOne) {
@@ -716,4 +717,139 @@ export async function saveJobSemanticFilterResult(
   record.filteredAt = new Date()
   await repo.save(record)
   return record
+}
+
+export async function saveJobCandidate(
+  ds: DataSource,
+  record: Partial<JobCandidate>
+) {
+  if (!record?.encryptCurrentUserId || !record?.encryptJobId) {
+    return null
+  }
+  const repo = ds.getRepository(JobCandidate)
+  const profileId = record.profileId ?? ''
+  const existing = await repo.findOne({
+    where: {
+      encryptCurrentUserId: record.encryptCurrentUserId,
+      encryptJobId: record.encryptJobId,
+      profileId
+    }
+  })
+  if (!existing) {
+    const created = new JobCandidate()
+    created.encryptCurrentUserId = record.encryptCurrentUserId
+    created.encryptJobId = record.encryptJobId
+    created.profileId = profileId
+    created.status = record.status ?? JobCandidateStatus.CANDIDATE
+    created.matchScore = record.matchScore ?? undefined
+    created.reasonJson = record.reasonJson ?? undefined
+    created.jobSnapshotJson = record.jobSnapshotJson ?? undefined
+    created.sourceKey = record.sourceKey ?? undefined
+    created.searchKeyword = record.searchKeyword ?? undefined
+    created.filterConditionKey = record.filterConditionKey ?? undefined
+    created.collectedAt = record.collectedAt ?? new Date()
+    created.statusUpdatedAt = record.statusUpdatedAt ?? new Date()
+    created.chatStartedAt = record.chatStartedAt ?? undefined
+    await repo.save(created)
+    return created
+  }
+  existing.matchScore = record.matchScore ?? existing.matchScore
+  existing.reasonJson = record.reasonJson ?? existing.reasonJson
+  existing.jobSnapshotJson = record.jobSnapshotJson ?? existing.jobSnapshotJson
+  existing.sourceKey = record.sourceKey ?? existing.sourceKey
+  existing.searchKeyword = record.searchKeyword ?? existing.searchKeyword
+  existing.filterConditionKey = record.filterConditionKey ?? existing.filterConditionKey
+  if (existing.status === JobCandidateStatus.CANDIDATE && record.status) {
+    existing.status = record.status
+    existing.statusUpdatedAt = record.statusUpdatedAt ?? new Date()
+  }
+  await repo.save(existing)
+  return existing
+}
+
+export async function listJobCandidates(
+  ds: DataSource,
+  options: {
+    encryptCurrentUserId: string
+    profileId?: string
+    statusList?: JobCandidateStatus[]
+    limit?: number
+    offset?: number
+  }
+) {
+  const { encryptCurrentUserId, profileId, statusList = [] } = options
+  if (!encryptCurrentUserId) {
+    return { items: [], total: 0 }
+  }
+  const where: Record<string, unknown> = { encryptCurrentUserId }
+  if (profileId !== undefined && profileId !== null) {
+    where.profileId = profileId
+  }
+  if (statusList.length) {
+    where.status = In(statusList)
+  }
+  const limit = Math.min(Math.max(options.limit ?? 50, 1), 200)
+  const offset = Math.max(options.offset ?? 0, 0)
+  const [items, total] = await ds.getRepository(JobCandidate).findAndCount({
+    where,
+    order: {
+      matchScore: 'DESC',
+      collectedAt: 'DESC'
+    },
+    take: limit,
+    skip: offset
+  })
+  return { items, total }
+}
+
+export async function updateJobCandidateStatus(
+  ds: DataSource,
+  payload: {
+    encryptCurrentUserId: string
+    encryptJobId: string
+    profileId?: string
+    status: JobCandidateStatus
+  }
+) {
+  if (!payload?.encryptCurrentUserId || !payload?.encryptJobId || !payload?.status) {
+    return null
+  }
+  const repo = ds.getRepository(JobCandidate)
+  const existing = await repo.findOne({
+    where: {
+      encryptCurrentUserId: payload.encryptCurrentUserId,
+      encryptJobId: payload.encryptJobId,
+      profileId: payload.profileId ?? ''
+    }
+  })
+  if (!existing) {
+    return null
+  }
+  existing.status = payload.status
+  existing.statusUpdatedAt = new Date()
+  if (payload.status === JobCandidateStatus.CHATTING && !existing.chatStartedAt) {
+    existing.chatStartedAt = new Date()
+  }
+  await repo.save(existing)
+  return existing
+}
+
+export async function getJobCandidate(
+  ds: DataSource,
+  payload: {
+    encryptCurrentUserId: string
+    encryptJobId: string
+    profileId?: string
+  }
+) {
+  if (!payload?.encryptCurrentUserId || !payload?.encryptJobId) {
+    return null
+  }
+  return await ds.getRepository(JobCandidate).findOne({
+    where: {
+      encryptCurrentUserId: payload.encryptCurrentUserId,
+      encryptJobId: payload.encryptJobId,
+      profileId: payload.profileId ?? ''
+    }
+  })
 }

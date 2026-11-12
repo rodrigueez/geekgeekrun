@@ -56,6 +56,16 @@ export enum JobFunnelEventType {
   INTERVIEW_SCHEDULED = 6,
   LOW_MATCH_SCORE = 7,
   SEMANTIC_FILTER_REJECTED = 8,
+  CANDIDATE_COLLECTED = 9,
+}
+
+export enum JobCandidateStatus {
+  CANDIDATE = 1,
+  QUEUED = 2,
+  CHATTING = 3,
+  CHATTED = 4,
+  INVALID = 5,
+  EXCLUDED = 6,
 }
 
 export enum JobMatchScorerType {
