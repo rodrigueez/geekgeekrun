@@ -15,6 +15,7 @@ import { JobHireStatusRecord } from "./entity/JobHireStatusRecord";
 import { JobFunnelEvent } from "./entity/JobFunnelEvent";
 import { JobTraversalCheckpoint } from "./entity/JobTraversalCheckpoint";
 import { JobMatchScore } from "./entity/JobMatchScore";
+import { JobSemanticFilterRecord } from "./entity/JobSemanticFilterRecord";
 import { JobFunnelEventType } from "./enums";
 
 function getBossInfoIfIsEqual (savedOne, currentOne) {
@@ -644,6 +645,75 @@ export async function saveJobMatchScore(
     : undefined
   record.inputHash = payload.inputHash
   record.scoredAt = new Date()
+  await repo.save(record)
+  return record
+}
+
+export async function getJobSemanticFilterResult(
+  ds: DataSource,
+  query: {
+    encryptCurrentUserId: string
+    encryptJobId: string
+    criteriaHash: string
+    modelId: string
+    stage: string
+  }
+) {
+  const repo = ds.getRepository(JobSemanticFilterRecord)
+  return repo.findOne({
+    where: {
+      encryptCurrentUserId: query.encryptCurrentUserId,
+      encryptJobId: query.encryptJobId,
+      criteriaHash: query.criteriaHash,
+      modelId: query.modelId,
+      stage: query.stage
+    }
+  })
+}
+
+export async function saveJobSemanticFilterResult(
+  ds: DataSource,
+  payload: {
+    encryptCurrentUserId: string
+    encryptJobId: string
+    criteriaHash: string
+    modelId: string
+    stage: string
+    matchResult: number
+    confidence: number
+    reasons?: string[]
+    constraints?: unknown
+    inputHash?: string
+  }
+) {
+  const repo = ds.getRepository(JobSemanticFilterRecord)
+  let record = await repo.findOne({
+    where: {
+      encryptCurrentUserId: payload.encryptCurrentUserId,
+      encryptJobId: payload.encryptJobId,
+      criteriaHash: payload.criteriaHash,
+      modelId: payload.modelId,
+      stage: payload.stage
+    }
+  })
+  if (!record) {
+    record = new JobSemanticFilterRecord()
+    record.encryptCurrentUserId = payload.encryptCurrentUserId
+    record.encryptJobId = payload.encryptJobId
+    record.criteriaHash = payload.criteriaHash
+    record.modelId = payload.modelId
+    record.stage = payload.stage
+  }
+  record.matchResult = payload.matchResult
+  record.confidence = payload.confidence
+  record.reasonsJson = payload.reasons?.length
+    ? JSON.stringify(payload.reasons)
+    : undefined
+  record.constraintsJson = payload.constraints
+    ? JSON.stringify(payload.constraints)
+    : undefined
+  record.inputHash = payload.inputHash
+  record.filteredAt = new Date()
   await repo.save(record)
   return record
 }

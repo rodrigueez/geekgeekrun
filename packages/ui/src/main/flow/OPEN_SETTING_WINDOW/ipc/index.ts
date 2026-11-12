@@ -228,6 +228,27 @@ export default function initIpc() {
       bossConfig.jobSourcePerformanceMinChats =
         payload.jobSourcePerformanceMinChats
     }
+    if (hasOwn(payload, 'jobSemanticFilterEnabled')) {
+      bossConfig.jobSemanticFilterEnabled = payload.jobSemanticFilterEnabled
+    }
+    if (hasOwn(payload, 'jobSemanticFilterCriteria')) {
+      bossConfig.jobSemanticFilterCriteria = payload.jobSemanticFilterCriteria
+    }
+    if (hasOwn(payload, 'jobSemanticFilterListPrecheck')) {
+      bossConfig.jobSemanticFilterListPrecheck =
+        payload.jobSemanticFilterListPrecheck
+    }
+    if (hasOwn(payload, 'jobSemanticFilterTopN')) {
+      bossConfig.jobSemanticFilterTopN = payload.jobSemanticFilterTopN
+    }
+    if (hasOwn(payload, 'jobSemanticFilterMaxCallsPerRun')) {
+      bossConfig.jobSemanticFilterMaxCallsPerRun =
+        payload.jobSemanticFilterMaxCallsPerRun
+    }
+    if (hasOwn(payload, 'jobSemanticFilterMinConfidence')) {
+      bossConfig.jobSemanticFilterMinConfidence =
+        payload.jobSemanticFilterMinConfidence
+    }
     if (hasOwn(payload, 'jobSourceList')) {
       bossConfig.jobSourceList = payload.jobSourceList
     }

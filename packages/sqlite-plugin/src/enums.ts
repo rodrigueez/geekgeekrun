@@ -55,6 +55,7 @@ export enum JobFunnelEventType {
   REPLY_RECEIVED = 5,
   INTERVIEW_SCHEDULED = 6,
   LOW_MATCH_SCORE = 7,
+  SEMANTIC_FILTER_REJECTED = 8,
 }
 
 export enum JobMatchScorerType {

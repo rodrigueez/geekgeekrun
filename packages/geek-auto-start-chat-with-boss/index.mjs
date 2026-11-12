@@ -64,6 +64,15 @@ import { handleChatAddFriendResponse } from './chat-startup.mjs'
 import { testIfJobTitleOrDescriptionSuit } from './job-detail.mjs'
 import { setFilterCondition } from './job-filter.mjs'
 import { findConditionByStrategy } from './not-suit-strategy.mjs'
+import {
+  evaluatePlanHardReject,
+  getCriteriaHash,
+  getJobSemanticInputHash
+} from './job-filter-agent-parse.mjs'
+import {
+  requestJobFilterPlan,
+  requestJobSemanticFilter
+} from './job-filter-agent.mjs'
 import { default as jobFilterConditions } from './internal-config/job-filter-conditions-20241002.json'
 import { default as rawIndustryFilterExemption } from './internal-config/job-filter-industry-filter-exemption-20241002.json'
 import { ChatStartupFrom } from '@geekgeekrun/sqlite-plugin/dist/entity/ChatStartupLog'
@@ -220,6 +229,38 @@ const isJobMatchLlmScoringEnabled =
   jobMatchLlmMaxCallsPerRun > 0 &&
   Boolean(jobMatchLlmConfig)
 const resumeHash = getResumeHash(resumeProfile)
+const jobSemanticFilterEnabled =
+  readConfigFile('boss.json').jobSemanticFilterEnabled ?? false
+const jobSemanticFilterCriteria =
+  String(readConfigFile('boss.json').jobSemanticFilterCriteria ?? '').trim()
+const jobSemanticFilterListPrecheck =
+  readConfigFile('boss.json').jobSemanticFilterListPrecheck ?? true
+const jobSemanticFilterTopN = (() => {
+  const value = Number(readConfigFile('boss.json').jobSemanticFilterTopN)
+  if (!Number.isFinite(value) || value < 1) {
+    return 5
+  }
+  return Math.min(Math.floor(value), 20)
+})()
+const jobSemanticFilterMaxCallsPerRun = (() => {
+  const value = Number(readConfigFile('boss.json').jobSemanticFilterMaxCallsPerRun)
+  if (!Number.isFinite(value) || value < 1) {
+    return 20
+  }
+  return Math.min(Math.floor(value), 500)
+})()
+const jobSemanticFilterMinConfidence = (() => {
+  const value = Number(readConfigFile('boss.json').jobSemanticFilterMinConfidence)
+  if (!Number.isFinite(value)) {
+    return 0.6
+  }
+  return Math.min(Math.max(value, 0), 1)
+})()
+const jobSemanticCriteriaHash = getCriteriaHash(jobSemanticFilterCriteria)
+const isJobSemanticFilterEnabled =
+  jobSemanticFilterEnabled &&
+  Boolean(jobSemanticFilterCriteria) &&
+  Boolean(jobMatchLlmConfig)
 const jobSourcePerformanceEnabled =
   readConfigFile('boss.json').jobSourcePerformanceEnabled ?? true
 const jobSourcePerformanceMinChats = (() => {
@@ -844,6 +885,141 @@ async function toRecommendPage (hooks) {
     }
   }
 
+  const semanticFilterResultCache = new Map()
+  const semanticRejectedJobIds = new Set()
+  let semanticFilterCallCount = 0
+  let jobFilterPlanPromise = null
+
+  const getJobFilterPlan = async () => {
+    if (!isJobSemanticFilterEnabled) {
+      return null
+    }
+    if (!jobFilterPlanPromise) {
+      jobFilterPlanPromise = requestJobFilterPlan({
+        llmConfig: jobMatchLlmConfig,
+        criteria: jobSemanticFilterCriteria
+      }).catch((err) => {
+        console.log('build job filter plan failed', err)
+        return null
+      })
+    }
+    return jobFilterPlanPromise
+  }
+
+  const isSemanticRejected = (result) => {
+    return Boolean(
+      result &&
+      result.match === false &&
+      result.confidence >= jobSemanticFilterMinConfidence
+    )
+  }
+
+  const runSemanticFilter = async (job, stage) => {
+    if (!isJobSemanticFilterEnabled || !traversalState.encryptUserId) {
+      return null
+    }
+    const encryptJobId = job?.jobInfo?.encryptId ?? job?.encryptJobId
+    if (!encryptJobId) {
+      return null
+    }
+    const cacheKey = `${stage}:${encryptJobId}`
+    if (semanticFilterResultCache.has(cacheKey)) {
+      const cached = semanticFilterResultCache.get(cacheKey)
+      return cached?.failed ? null : cached
+    }
+    const inputHash = getJobSemanticInputHash(job, stage)
+    const cacheContext = {}
+    try {
+      await hooks.jobSemanticFilterCacheGet?.promise?.(
+        {
+          encryptCurrentUserId: traversalState.encryptUserId,
+          encryptJobId,
+          criteriaHash: jobSemanticCriteriaHash,
+          modelId: jobMatchLlmModelId,
+          stage
+        },
+        cacheContext
+      )
+    } catch (err) {
+      console.log('read job semantic filter cache failed', err)
+    }
+    if (
+      cacheContext.record &&
+      cacheContext.record.inputHash === inputHash
+    ) {
+      let reasons = []
+      let constraints = {}
+      try {
+        reasons = cacheContext.record.reasonsJson
+          ? JSON.parse(cacheContext.record.reasonsJson)
+          : []
+        constraints = cacheContext.record.constraintsJson
+          ? JSON.parse(cacheContext.record.constraintsJson)
+          : {}
+      } catch {}
+      const result = {
+        match: Boolean(cacheContext.record.matchResult),
+        confidence: Number(cacheContext.record.confidence) || 0,
+        reasons,
+        constraints
+      }
+      semanticFilterResultCache.set(cacheKey, result)
+      return result
+    }
+
+    const plan = await getJobFilterPlan()
+    let result = null
+    if (stage === 'list' && jobSemanticFilterListPrecheck) {
+      const hardRejectResult = evaluatePlanHardReject(job, plan ?? {})
+      if (hardRejectResult.reject) {
+        result = {
+          match: false,
+          confidence: 1,
+          reasons: hardRejectResult.reasons,
+          constraints: {
+            source: 'hard-rule'
+          }
+        }
+      }
+    }
+    if (!result && semanticFilterCallCount < jobSemanticFilterMaxCallsPerRun) {
+      semanticFilterCallCount++
+      try {
+        result = await requestJobSemanticFilter({
+          llmConfig: jobMatchLlmConfig,
+          criteria: jobSemanticFilterCriteria,
+          plan,
+          job,
+          stage
+        })
+      } catch (err) {
+        console.log('request job semantic filter failed', err)
+      }
+    }
+    if (!result) {
+      semanticFilterResultCache.set(cacheKey, { failed: true })
+      return null
+    }
+    semanticFilterResultCache.set(cacheKey, result)
+    try {
+      await hooks.jobSemanticFilterCacheSet?.promise?.({
+        encryptCurrentUserId: traversalState.encryptUserId,
+        encryptJobId,
+        criteriaHash: jobSemanticCriteriaHash,
+        modelId: jobMatchLlmModelId,
+        stage,
+        matchResult: result.match ? 1 : 0,
+        confidence: result.confidence,
+        reasons: result.reasons,
+        constraints: result.constraints,
+        inputHash
+      })
+    } catch (err) {
+      console.log('save job semantic filter cache failed', err)
+    }
+    return result
+  }
+
   afterPageLoad: while (true) {
     const sourceCheckpoint = findCheckpointBySourceKey(
       traversalState.checkpoints,
@@ -1153,28 +1329,71 @@ async function toRecommendPage (hooks) {
               }
               const getRankedTargetJobsWithLlm = async () => {
                 const ranked = getRankedTargetJobs()
-                if (!isJobMatchLlmScoringEnabled || !ranked.length) {
+                if (!ranked.length) {
                   return ranked
                 }
-                const candidates = [...ranked]
-                const topCandidates = candidates.slice(0, jobMatchLlmTopN)
-                for (const candidate of topCandidates) {
-                  const llmResult = await requestLlmMatchScore(
-                    candidate.job,
-                    candidate.score
-                  )
-                  if (llmResult) {
-                    candidate.llmScore = llmResult.score
-                    candidate.reasons = [
-                      ...(candidate.reasons ?? []),
-                      ...(llmResult.reasons ?? [])
-                    ]
-                    candidate.score = combineMatchScores(
-                      candidate.score,
-                      llmResult.score,
-                      jobMatchLlmWeight
+                let candidates = [...ranked]
+                if (isJobMatchLlmScoringEnabled) {
+                  const topCandidates = candidates.slice(0, jobMatchLlmTopN)
+                  for (const candidate of topCandidates) {
+                    const llmResult = await requestLlmMatchScore(
+                      candidate.job,
+                      candidate.score
                     )
+                    if (llmResult) {
+                      candidate.llmScore = llmResult.score
+                      candidate.reasons = [
+                        ...(candidate.reasons ?? []),
+                        ...(llmResult.reasons ?? [])
+                      ]
+                      candidate.score = combineMatchScores(
+                        candidate.score,
+                        llmResult.score,
+                        jobMatchLlmWeight
+                      )
+                    }
                   }
+                  candidates.sort((a, b) => b.score - a.score || a.index - b.index)
+                }
+                if (
+                  isJobSemanticFilterEnabled &&
+                  jobSemanticFilterListPrecheck
+                ) {
+                  const precheckCandidates = candidates.slice(
+                    0,
+                    jobSemanticFilterTopN
+                  )
+                  for (const candidate of precheckCandidates) {
+                    const semanticResult = await runSemanticFilter(
+                      candidate.job,
+                      'list'
+                    )
+                    if (isSemanticRejected(semanticResult)) {
+                      const encryptJobId = candidate.job.encryptJobId
+                      semanticRejectedJobIds.add(encryptJobId)
+                      blockJobNotSuit.add(encryptJobId)
+                      await emitFunnelEvents([{
+                        encryptJobId,
+                        encryptBossId: candidate.job.encryptBossId,
+                        eventType: JobFunnelEventType.SEMANTIC_FILTER_REJECTED,
+                        eventDate: new Date(),
+                        jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+                        sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                        searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                        filterConditionKey: activeFilterConditionKey ?? undefined,
+                        filterConditionJson: activeFilterConditionJson ?? undefined,
+                        extInfo: JSON.stringify({
+                          stage: 'list',
+                          confidence: semanticResult.confidence,
+                          reasons: semanticResult.reasons,
+                          constraints: semanticResult.constraints
+                        })
+                      }])
+                    }
+                  }
+                  candidates = candidates.filter(
+                    (candidate) => !semanticRejectedJobIds.has(candidate.job.encryptJobId)
+                  )
                 }
                 return candidates.sort((a, b) => b.score - a.score || a.index - b.index)
               }
@@ -1303,6 +1522,35 @@ async function toRecommendPage (hooks) {
                       )
                     : null
                   currentJobMatchScore = finalDetailMatchScore
+                  const semanticFilterResult = await runSemanticFilter(
+                    targetJobData,
+                    'detail'
+                  )
+                  if (isSemanticRejected(semanticFilterResult)) {
+                    const encryptJobId = targetJobData.jobInfo.encryptId
+                    semanticRejectedJobIds.add(encryptJobId)
+                    blockJobNotSuit.add(encryptJobId)
+                    await emitFunnelEvents([{
+                      encryptJobId,
+                      encryptBossId: targetJobData.jobInfo.encryptUserId,
+                      eventType: JobFunnelEventType.SEMANTIC_FILTER_REJECTED,
+                      eventDate: new Date(),
+                      jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+                      sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                      searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                      filterConditionKey: activeFilterConditionKey ?? undefined,
+                      filterConditionJson: activeFilterConditionJson ?? undefined,
+                      matchScore: currentJobMatchScore ?? undefined,
+                      extInfo: JSON.stringify({
+                        stage: 'detail',
+                        confidence: semanticFilterResult.confidence,
+                        reasons: semanticFilterResult.reasons,
+                        constraints: semanticFilterResult.constraints
+                      })
+                    }])
+                    await saveTraversalCheckpoint(encryptJobId)
+                    continue continueFind
+                  }
                   if (
                     isJobMatchScoringEnabled &&
                     jobMatchMinScore > 0 &&

@@ -383,6 +383,74 @@
               </div>
             </div>
           </el-card>
+          <el-card class="config-section">
+            <el-form-item mb0>
+              <div font-size-16px>职位筛选 Agent</div>
+            </el-form-item>
+            <div font-size-12px mb8px>
+              用自然语言描述你的求职要求，例如“找兼职线上 SEO 工作，不要全职、坐班或需要到岗的职位”。
+              Agent 会先把描述整理成筛选计划，再结合职位详情判断，信息不足时不会误杀。
+              使用“大语言模型设置”中已启用的模型；建议使用本地 Magpie 网关。
+            </div>
+            <el-checkbox v-model="formContent.jobSemanticFilterEnabled">
+              启用自然语言职位筛选
+            </el-checkbox>
+            <div v-if="formContent.jobSemanticFilterEnabled" mt10px>
+              <el-input
+                v-model="formContent.jobSemanticFilterCriteria"
+                type="textarea"
+                :autosize="{ minRows: 3, maxRows: 6 }"
+                placeholder="例如：我要找兼职线上 SEO 工作，不要全职、坐班或必须到岗的职位"
+              />
+              <el-checkbox
+                v-model="formContent.jobSemanticFilterListPrecheck"
+                mt8px
+              >
+                列表阶段先做一次预筛（可用标题和技能标签排除明显不符的职位）
+              </el-checkbox>
+              <div mt8px font-size-12px>
+                每个列表最多预筛
+                <el-input-number
+                  v-model="formContent.jobSemanticFilterTopN"
+                  inline-block
+                  w-100px
+                  :min="1"
+                  :max="20"
+                  :step="1"
+                  step-strictly
+                  :precision="0"
+                  controls-position="right"
+                />
+                个职位，单次运行最多调用
+                <el-input-number
+                  v-model="formContent.jobSemanticFilterMaxCallsPerRun"
+                  inline-block
+                  w-110px
+                  :min="1"
+                  :max="500"
+                  :step="5"
+                  step-strictly
+                  :precision="0"
+                  controls-position="right"
+                />
+                次模型
+              </div>
+              <div mt8px font-size-12px>
+                只有模型置信度达到
+                <el-input-number
+                  v-model="formContent.jobSemanticFilterMinConfidence"
+                  inline-block
+                  w-110px
+                  :min="0"
+                  :max="1"
+                  :step="0.05"
+                  :precision="2"
+                  controls-position="right"
+                />
+                时才按“不符合”跳过
+              </div>
+            </div>
+          </el-card>
           <!-- <el-form-item
           label="钉钉机器人 AccessToken（用于记录开聊，请勿使用公司内部群）"
           prop="dingtalkRobotAccessToken"
@@ -1971,6 +2039,12 @@ const formContent = ref({
   jobMatchLlmMaxCallsPerRun: 20,
   jobSourcePerformanceEnabled: true,
   jobSourcePerformanceMinChats: 10,
+  jobSemanticFilterEnabled: false,
+  jobSemanticFilterCriteria: '',
+  jobSemanticFilterListPrecheck: true,
+  jobSemanticFilterTopN: 5,
+  jobSemanticFilterMaxCallsPerRun: 20,
+  jobSemanticFilterMinConfidence: 0.6,
   __jobSourceList: formatJobSourceConfigToFormValue([
     {
       type: 'expect',
@@ -2147,6 +2221,18 @@ electron.ipcRenderer.invoke('fetch-config-file-content').then((res) => {
     res.config['boss.json'].jobSourcePerformanceEnabled ?? true
   formContent.value.jobSourcePerformanceMinChats =
     Number(res.config['boss.json'].jobSourcePerformanceMinChats) || 10
+  formContent.value.jobSemanticFilterEnabled =
+    res.config['boss.json'].jobSemanticFilterEnabled ?? false
+  formContent.value.jobSemanticFilterCriteria =
+    res.config['boss.json'].jobSemanticFilterCriteria ?? ''
+  formContent.value.jobSemanticFilterListPrecheck =
+    res.config['boss.json'].jobSemanticFilterListPrecheck ?? true
+  formContent.value.jobSemanticFilterTopN =
+    Number(res.config['boss.json'].jobSemanticFilterTopN) || 5
+  formContent.value.jobSemanticFilterMaxCallsPerRun =
+    Number(res.config['boss.json'].jobSemanticFilterMaxCallsPerRun) || 20
+  formContent.value.jobSemanticFilterMinConfidence =
+    Number(res.config['boss.json'].jobSemanticFilterMinConfidence ?? 0.6)
   formContent.value.__jobSourceList = formatJobSourceConfigToFormValue(
     res.config['boss.json'].jobSourceList || []
   )
