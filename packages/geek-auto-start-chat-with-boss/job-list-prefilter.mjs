@@ -29,6 +29,7 @@ export function getJobListSkipReason(
     blockBossNotActive,
     blockBossNotNewChat,
     blockJobNotHiring,
+    processedJobIds,
     isSalaryParseable = () => true,
     isSalarySuit = () => true
   } = {}
@@ -44,6 +45,9 @@ export function getJobListSkipReason(
   }
   if (blockJobNotHiring?.has(job?.encryptJobId)) {
     return 'JOB_NOT_HIRING'
+  }
+  if (processedJobIds?.has(job?.encryptJobId)) {
+    return 'PROCESSED_RECENTLY'
   }
   if (!isCompanyAllowed(job, companyAllowList)) {
     return 'COMPANY_NOT_IN_ALLOW_LIST'

@@ -14,7 +14,8 @@ import { ChatMessageRecord } from '@geekgeekrun/sqlite-plugin/dist/entity/ChatMe
 import {
   saveChatMessageRecord,
   getJobHireStatusRecord,
-  saveJobHireStatusRecord
+  saveJobHireStatusRecord,
+  saveJobFunnelEvents
 } from '@geekgeekrun/sqlite-plugin/dist/handlers'
 import {
   writeStorageFile,
@@ -29,7 +30,7 @@ import {
   RECHAT_LLM_FALLBACK
 } from '../../../common/enums/auto-start-chat'
 import gtag from '../../utils/gtag'
-import { JobHireStatus } from '@geekgeekrun/sqlite-plugin/dist/enums'
+import { JobFunnelEventType, JobHireStatus } from '@geekgeekrun/sqlite-plugin/dist/enums'
 import dayjs from 'dayjs'
 import cheerio from 'cheerio'
 import { connectToDaemon, sendToDaemon } from '../OPEN_SETTING_WINDOW/connect-to-daemon'
@@ -197,9 +198,27 @@ async function saveCurrentChatRecord(page) {
   })
 
   await saveChatMessageRecord(ds, chatRecordList)
+  const encryptJobId = await page.evaluate(
+    'document.querySelector(".chat-conversation .chat-im.chat-editor")?.__vue__?.conversation$?.encryptJobId'
+  )
+  if (encryptJobId && chatRecordList.some((it) => it.style === 'received')) {
+    await saveJobFunnelEvents(ds, [
+      {
+        encryptCurrentUserId: userInfo.encryptUserId,
+        encryptJobId,
+        encryptBossId: bossInfo.encryptBossId,
+        eventType: JobFunnelEventType.REPLY_RECEIVED,
+        eventDate: new Date(),
+        runRecordId
+      }
+    ])
+  }
 }
 
 async function checkJobIsClosed() {
+  const encryptCurrentUserId = await pageMapByName.boss!.evaluate(
+    'document.querySelector(".main-wrap").__vue__.$store.state.userInfo.encryptUserId'
+  )
   const encryptJobId = await pageMapByName.boss!.evaluate(() => {
     return document.querySelector('.chat-conversation .chat-im.chat-editor')?.__vue__?.conversation$
       .encryptJobId
@@ -261,6 +280,7 @@ async function checkJobIsClosed() {
           ) {
             await saveJobHireStatusRecord(await dbInitPromise, {
               encryptJobId,
+            encryptCurrentUserId,
               hireStatus: JobHireStatus.DELETED,
               lastSeenDate: new Date()
             })
@@ -272,12 +292,14 @@ async function checkJobIsClosed() {
             if ([`职位已关闭`].includes(jobStatusText)) {
               await saveJobHireStatusRecord(await dbInitPromise, {
                 encryptJobId,
+                encryptCurrentUserId,
                 hireStatus: JobHireStatus.CLOSED,
                 lastSeenDate: new Date()
               })
             } else {
               await saveJobHireStatusRecord(await dbInitPromise, {
                 encryptJobId,
+                encryptCurrentUserId,
                 hireStatus: JobHireStatus.HIRING,
                 lastSeenDate: new Date()
               })

@@ -20,6 +20,11 @@ import {
   isFilterConditionEmpty,
 } from './combineCalculator.mjs'
 import { getJobListSkipReason } from './job-list-prefilter.mjs'
+import {
+  getJobSourceKey,
+  rotateListToKey,
+  findCheckpointBySourceKey
+} from './job-traversal.mjs'
 import { default as jobFilterConditions } from './internal-config/job-filter-conditions-20241002.json'
 import { default as rawIndustryFilterExemption } from './internal-config/job-filter-industry-filter-exemption-20241002.json'
 import { ChatStartupFrom } from '@geekgeekrun/sqlite-plugin/dist/entity/ChatStartupLog'
@@ -30,7 +35,8 @@ import {
   SalaryCalculateWay,
   JobDetailRegExpMatchLogic,
   JobSource,
-  CombineRecommendJobFilterType
+  CombineRecommendJobFilterType,
+  JobFunnelEventType
 } from '@geekgeekrun/sqlite-plugin/dist/enums'
 import {
   activeDescList,
@@ -748,6 +754,16 @@ async function toRecommendPage (hooks) {
     await storeStorage(page).catch(() => void 0)
   }
 
+  const traversalState = {
+    encryptUserId: userInfoResponse?.zpData?.encryptUserId ?? null,
+    checkpoints: [],
+    processedJobIds: new Set()
+  }
+  await hooks.jobTraversalStateLoaded?.promise?.(
+    traversalState.encryptUserId,
+    traversalState
+  )
+
   const computedSourceList = []
   for (const source of normalizedJobSource) {
     switch (source.type) {
@@ -779,6 +795,7 @@ async function toRecommendPage (hooks) {
         allExpectJobEntryHandles.forEach((it, index) => {
           computedSourceList.push({
             type: source.type,
+            index,
             selector: `${USER_SET_EXPECT_JOB_ENTRIES_SELECTOR}:nth-child(${index + 1})`,
             async getIsCurrentActiveSource () {
               return await page.evaluate(
@@ -806,6 +823,7 @@ async function toRecommendPage (hooks) {
       case 'search': {
         computedSourceList.push({
           type: source.type,
+          keyword: source.keyword,
           async getIsCurrentActiveSource () {
             const elHandle = await page.$(`.page-jobs-main`)
             const currentKeyWord = await elHandle?.evaluate((el) => {
@@ -835,9 +853,67 @@ async function toRecommendPage (hooks) {
     }
   }
 
+  computedSourceList.forEach((source, index) => {
+    source.sourceKey = getJobSourceKey(source, index)
+  })
+
+  const checkpointSourceKey = traversalState.checkpoints?.[0]?.sourceKey
+  const checkpointSource = findCheckpointBySourceKey(
+    traversalState.checkpoints,
+    checkpointSourceKey
+  )
+  const orderedSourceList = rotateListToKey(
+    computedSourceList,
+    checkpointSource ? checkpointSource.sourceKey : null,
+    (source) => source.sourceKey
+  )
+  computedSourceList.splice(0, computedSourceList.length, ...orderedSourceList)
+
   let currentSourceIndex = 0
   let lastFilterConditionKey = null
+  let activeFilterConditionKey = null
+  let activeFilterConditionJson = null
+  const emittedPrefilterJobIds = new Set()
+
+  const emitFunnelEvents = async (events) => {
+    if (!events?.length || !traversalState.encryptUserId) {
+      return
+    }
+    try {
+      await hooks.jobFunnelEvents?.promise?.(
+        events.map((event) => ({
+          encryptCurrentUserId: traversalState.encryptUserId,
+          runRecordId: hooks.runRecordId ?? undefined,
+          ...event
+        }))
+      )
+    } catch (err) {
+      console.log('save job funnel events failed', err)
+    }
+  }
+
+  const saveTraversalCheckpoint = async (lastProcessedJobId) => {
+    const sourceKey = computedSourceList[currentSourceIndex]?.sourceKey
+    if (!sourceKey || !traversalState.encryptUserId) {
+      return
+    }
+    try {
+      await hooks.jobTraversalCheckpointSaved?.promise?.({
+        encryptCurrentUserId: traversalState.encryptUserId,
+        sourceKey,
+        filterConditionKey: activeFilterConditionKey ?? undefined,
+        lastProcessedJobId
+      })
+    } catch (err) {
+      console.log('save job traversal checkpoint failed', err)
+    }
+  }
+
   afterPageLoad: while (true) {
+    const sourceCheckpoint = findCheckpointBySourceKey(
+      traversalState.checkpoints,
+      computedSourceList[currentSourceIndex]?.sourceKey
+    )
     // check set security question tip modal
     let setSecurityQuestionTipModelProxy
     try {
@@ -858,7 +934,7 @@ async function toRecommendPage (hooks) {
       }
     }
 
-    const filterConditions =
+    let filterConditions =
       combineRecommendJobFilterType === CombineRecommendJobFilterType.STATIC_COMBINE
         ? formatStaticCombineFilters(staticCombineRecommendJobFilterConditions)
             .slice(0, maxRecommendJobFilterCombinations)
@@ -868,6 +944,11 @@ async function toRecommendPage (hooks) {
                 !isSkipEmptyConditionForCombineRecommendJobFilter,
               maxCombinations: maxRecommendJobFilterCombinations
             })
+    filterConditions = rotateListToKey(
+      filterConditions,
+      sourceCheckpoint?.filterConditionKey ?? null,
+      (filterCondition) => getFilterConditionKey(filterCondition)
+    )
     let expectJobList
     let filterConditionIndex = -1
     iterateFilterCondition: for (
@@ -936,6 +1017,8 @@ async function toRecommendPage (hooks) {
           })
         }
         const filterConditionKey = getFilterConditionKey(filterCondition)
+        activeFilterConditionKey = filterConditionKey
+        activeFilterConditionJson = filterCondition ? JSON.stringify(filterCondition) : null
         if (filterConditionKey !== lastFilterConditionKey) {
           await sleepWithRandomDelay(300)
           await setFilterCondition(filterCondition)
@@ -997,7 +1080,11 @@ async function toRecommendPage (hooks) {
               async function updateJobListData () {
                 jobListData = await page.evaluate(`document.querySelector('.page-jobs-main')?.__vue__?.jobList`)
                 const skipReasonCount = {}
+                const prefilterEvents = []
                 for (const it of jobListData) {
+                  const hasEmitted = emittedPrefilterJobIds.has(it.encryptJobId) ||
+                    blockJobNotSuit.has(it.encryptJobId) ||
+                    traversalState.processedJobIds.has(it.encryptJobId)
                   const skipReason = getJobListSkipReason(it, {
                     expectCityList,
                     expectWorkExpList,
@@ -1013,6 +1100,7 @@ async function toRecommendPage (hooks) {
                     blockBossNotActive,
                     blockBossNotNewChat,
                     blockJobNotHiring,
+                    processedJobIds: traversalState.processedJobIds,
                     isSalaryParseable: job => {
                       const salaryData = parseSalary(job.salaryDesc)
                       return Boolean(salaryData.high && salaryData.low)
@@ -1023,11 +1111,27 @@ async function toRecommendPage (hooks) {
                     continue
                   }
                   blockJobNotSuit.add(it.encryptJobId)
+                  if (skipReason !== 'PROCESSED_RECENTLY' && !hasEmitted) {
+                    emittedPrefilterJobIds.add(it.encryptJobId)
+                    prefilterEvents.push({
+                      encryptJobId: it.encryptJobId,
+                      encryptBossId: it.encryptBossId,
+                      eventType: JobFunnelEventType.PREFILTER_SKIPPED,
+                      eventDate: new Date(),
+                      jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+                      sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                      searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                      filterConditionKey: activeFilterConditionKey ?? undefined,
+                      filterConditionJson: activeFilterConditionJson ?? undefined,
+                      skipReason
+                    })
+                  }
                   skipReasonCount[skipReason] = (skipReasonCount[skipReason] ?? 0) + 1
                 }
                 if (Object.keys(skipReasonCount).length) {
                   console.log('job list prefilter skipped:', skipReasonCount)
                 }
+                await emitFunnelEvents(prefilterEvents)
               }
               await updateJobListData()
 
@@ -1040,6 +1144,7 @@ async function toRecommendPage (hooks) {
                     !blockBossNotActive.has(it.encryptBossId) &&
                     !blockJobNotSuit.has(it.encryptJobId) &&
                     !blockJobNotHiring.has(it.encryptJobId) &&
+                    !traversalState.processedJobIds.has(it.encryptJobId) &&
                     (
                       (
                         enableCompanyAllowList ?
@@ -1180,6 +1285,19 @@ async function toRecommendPage (hooks) {
                   selectedJobData = await page.evaluate('document.querySelector(".page-jobs-main").__vue__.currentJob')
                   // save the job detail info
                   await hooks.jobDetailIsGetFromRecommendList?.promise(targetJobData)
+                  traversalState.processedJobIds.add(targetJobData.jobInfo.encryptId)
+                  await emitFunnelEvents([{
+                    encryptJobId: targetJobData.jobInfo.encryptId,
+                    encryptBossId: targetJobData.jobInfo.encryptUserId,
+                    eventType: JobFunnelEventType.DETAIL_VIEWED,
+                    eventDate: new Date(),
+                    jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+                    sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                    searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                    filterConditionKey: activeFilterConditionKey ?? undefined,
+                    filterConditionJson: activeFilterConditionJson ?? undefined
+                  }])
+                  await saveTraversalCheckpoint(targetJobData.jobInfo.encryptId)
 
                   //#region collect not suit reasons
                   const notSuitReasonIdToStrategyMap = {}
@@ -1487,18 +1605,51 @@ async function toRecommendPage (hooks) {
                   // 1. find the one mark on Boss
                   const markOnBossCondition = Object.keys(notSuitReasonIdToStrategyMap).find(k => notSuitReasonIdToStrategyMap[k] === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_BOSS)
                   if (markOnBossCondition) {
+                    await emitFunnelEvents([{
+                      encryptJobId: targetJobData.jobInfo.encryptId,
+                      encryptBossId: targetJobData.jobInfo.encryptUserId,
+                      eventType: JobFunnelEventType.MARKED_NOT_SUIT,
+                      eventDate: new Date(),
+                      jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+                      sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                      searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                      filterConditionKey: activeFilterConditionKey ?? undefined,
+                      skipReason: markOnBossCondition
+                    }])
                     await notSuitConditionHandleMap[markOnBossCondition]()
                     continue continueFind
                   }
                   // 2. if there is no condition to mark Boss, then find the one mark on local db
                   const markOnLocalDbCondition = Object.keys(notSuitReasonIdToStrategyMap).find(k => notSuitReasonIdToStrategyMap[k] === MarkAsNotSuitOp.MARK_AS_NOT_SUIT_ON_LOCAL)
                   if (markOnLocalDbCondition) {
+                    await emitFunnelEvents([{
+                      encryptJobId: targetJobData.jobInfo.encryptId,
+                      encryptBossId: targetJobData.jobInfo.encryptUserId,
+                      eventType: JobFunnelEventType.MARKED_NOT_SUIT,
+                      eventDate: new Date(),
+                      jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+                      sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                      searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                      filterConditionKey: activeFilterConditionKey ?? undefined,
+                      skipReason: markOnLocalDbCondition
+                    }])
                     await notSuitConditionHandleMap[markOnLocalDbCondition]()
                     continue continueFind
                   }
                   // 3.
                   const noOpCondition = Object.keys(notSuitReasonIdToStrategyMap).find(k => notSuitReasonIdToStrategyMap[k] === MarkAsNotSuitOp.NO_OP)
                   if (noOpCondition) {
+                    await emitFunnelEvents([{
+                      encryptJobId: targetJobData.jobInfo.encryptId,
+                      encryptBossId: targetJobData.jobInfo.encryptUserId,
+                      eventType: JobFunnelEventType.MARKED_NOT_SUIT,
+                      eventDate: new Date(),
+                      jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+                      sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                      searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                      filterConditionKey: activeFilterConditionKey ?? undefined,
+                      skipReason: noOpCondition
+                    }])
                     await notSuitConditionHandleMap[noOpCondition]()
                     continue continueFind
                   }
@@ -1595,10 +1746,26 @@ async function toRecommendPage (hooks) {
               targetJobData,
               {
                 chatStartupFrom: ChatStartupFrom.AutoFromRecommendList,
-                jobSource: JobSource[computedSourceList[currentSourceIndex]?.type]
+                jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+                sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+                searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+                filterConditionKey: activeFilterConditionKey ?? undefined
               }
             )
             blockBossNotNewChat.add(targetJobData.jobInfo.encryptUserId)
+            traversalState.processedJobIds.add(targetJobData.jobInfo.encryptId)
+            await emitFunnelEvents([{
+              encryptJobId: targetJobData.jobInfo.encryptId,
+              encryptBossId: targetJobData.jobInfo.encryptUserId,
+              eventType: JobFunnelEventType.CHAT_STARTED,
+              eventDate: new Date(),
+              jobSource: JobSource[computedSourceList[currentSourceIndex]?.type],
+              sourceKey: computedSourceList[currentSourceIndex]?.sourceKey,
+              searchKeyword: computedSourceList[currentSourceIndex]?.keyword,
+              filterConditionKey: activeFilterConditionKey ?? undefined,
+              filterConditionJson: activeFilterConditionJson ?? undefined
+            }])
+            await saveTraversalCheckpoint(targetJobData.jobInfo.encryptId)
 
             await storeStorage(page).catch(() => void 0)
             await sleepWithRandomDelay(1500)

@@ -12,6 +12,9 @@ import { MarkAsNotSuitLog } from "./entity/MarkAsNotSuitLog";
 import { ChatMessageRecord } from "./entity/ChatMessageRecord";
 import { LlmModelUsageRecord } from "./entity/LlmModelUsageRecord";
 import { JobHireStatusRecord } from "./entity/JobHireStatusRecord";
+import { JobFunnelEvent } from "./entity/JobFunnelEvent";
+import { JobTraversalCheckpoint } from "./entity/JobTraversalCheckpoint";
+import { JobFunnelEventType } from "./enums";
 
 function getBossInfoIfIsEqual (savedOne, currentOne) {
   if (savedOne === currentOne) {
@@ -419,4 +422,127 @@ export async function getJobHireStatusRecord(
     }
   })
   return result
+}
+
+export async function saveJobFunnelEvents(
+  ds: DataSource,
+  events: Array<Partial<JobFunnelEvent>> = []
+) {
+  if (!events.length) {
+    return 0
+  }
+  const repo = ds.getRepository(JobFunnelEvent)
+  const records: JobFunnelEvent[] = []
+  for (const event of events) {
+    if (!event?.encryptCurrentUserId) {
+      continue
+    }
+    if (
+      event.encryptJobId &&
+      [
+        JobFunnelEventType.REPLY_RECEIVED,
+        JobFunnelEventType.INTERVIEW_SCHEDULED
+      ].includes(event.eventType as JobFunnelEventType)
+    ) {
+      const exists = await repo.findOne({
+        where: {
+          encryptCurrentUserId: event.encryptCurrentUserId,
+          encryptJobId: event.encryptJobId,
+          eventType: event.eventType
+        }
+      })
+      if (exists) {
+        continue
+      }
+    }
+    const record = new JobFunnelEvent()
+    Object.assign(record, {
+      eventDate: new Date(),
+      ...event
+    })
+    records.push(record)
+  }
+  if (!records.length) {
+    return 0
+  }
+  await repo.save(records)
+  return records.length
+}
+
+export async function getRecentProcessedJobIds(
+  ds: DataSource,
+  encryptCurrentUserId: string,
+  days = 7
+) {
+  if (!encryptCurrentUserId) {
+    return []
+  }
+  const repo = ds.getRepository(JobFunnelEvent)
+  const rows = await repo.find({
+    select: {
+      encryptJobId: true
+    },
+    where: {
+      encryptCurrentUserId,
+      eventDate: MoreThanOrEqual(
+        new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+      ),
+      eventType: In([
+        JobFunnelEventType.DETAIL_VIEWED,
+        JobFunnelEventType.CHAT_STARTED
+      ])
+    }
+  })
+  return Array.from(
+    new Set(rows.map(item => item.encryptJobId).filter(Boolean))
+  )
+}
+
+export async function getJobTraversalCheckpoints(
+  ds: DataSource,
+  encryptCurrentUserId: string
+) {
+  if (!encryptCurrentUserId) {
+    return []
+  }
+  const repo = ds.getRepository(JobTraversalCheckpoint)
+  return repo.find({
+    where: {
+      encryptCurrentUserId
+    },
+    order: {
+      updatedAt: "DESC"
+    }
+  })
+}
+
+export async function saveJobTraversalCheckpoint(
+  ds: DataSource,
+  payload: {
+    encryptCurrentUserId: string
+    sourceKey: string
+    filterConditionKey?: string
+    lastProcessedJobId?: string
+  }
+) {
+  if (!payload?.encryptCurrentUserId || !payload?.sourceKey) {
+    return null
+  }
+  const repo = ds.getRepository(JobTraversalCheckpoint)
+  let record = await repo.findOne({
+    where: {
+      encryptCurrentUserId: payload.encryptCurrentUserId,
+      sourceKey: payload.sourceKey
+    }
+  })
+  if (!record) {
+    record = new JobTraversalCheckpoint()
+    record.encryptCurrentUserId = payload.encryptCurrentUserId
+    record.sourceKey = payload.sourceKey
+  }
+  record.filterConditionKey = payload.filterConditionKey
+  record.lastProcessedJobId = payload.lastProcessedJobId
+  record.updatedAt = new Date()
+  await repo.save(record)
+  return record
 }

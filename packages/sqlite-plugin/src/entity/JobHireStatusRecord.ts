@@ -8,6 +8,12 @@ export class JobHireStatusRecord {
   encryptJobId: string;
 
   @Index()
+  @Column({
+    nullable: true
+  })
+  encryptCurrentUserId?: string;
+
+  @Index()
   @Column()
   hireStatus: JobHireStatus;
 

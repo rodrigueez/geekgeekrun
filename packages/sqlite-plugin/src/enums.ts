@@ -46,3 +46,13 @@ export enum JobHireStatus {
   CLOSED = 2,
   DELETED = 3,
 }
+
+export enum JobFunnelEventType {
+  DETAIL_VIEWED = 1,
+  PREFILTER_SKIPPED = 2,
+  MARKED_NOT_SUIT = 3,
+  CHAT_STARTED = 4,
+  REPLY_RECEIVED = 5,
+  INTERVIEW_SCHEDULED = 6,
+  LOW_MATCH_SCORE = 7,
+}

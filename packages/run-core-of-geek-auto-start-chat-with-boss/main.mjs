@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { get__dirname } from '@geekgeekrun/utils/legacy-path.mjs';
 import JSON5 from 'json5'
+import minimist from 'minimist'
 import { readConfigFile, readStorageFile, getPublicDbFilePath } from '@geekgeekrun/geek-auto-start-chat-with-boss/runtime-file-utils.mjs'
 import { sleep } from '@geekgeekrun/utils/sleep.mjs'
 import {
@@ -28,6 +29,8 @@ const rerunInterval = (() => {
   return v
 })()
 
+const runRecordId = minimist(process.argv.slice(2))['run-record-id'] ?? null
+
 process.on('disconnect', () => {
   process.exit()
 })
@@ -46,6 +49,7 @@ const main = async () => {
     process.exit(AUTO_CHAT_ERROR_EXIT_CODE.COOKIE_INVALID)
   }
   const hooks = {
+    runRecordId,
     daemonInitialized: new AsyncSeriesHook(),
     puppeteerLaunched: new SyncHook(['browser']),
     pageGotten: new SyncHook(['page']),
@@ -59,6 +63,9 @@ const main = async () => {
     noPositionFoundAfterTraverseAllJob: new SyncHook(),
     errorEncounter: new SyncHook(['errorInfo']),
     encounterEmptyRecommendJobList: new AsyncSeriesHook(['args']),
+    jobTraversalStateLoaded: new AsyncSeriesHook(['encryptUserId', 'context']),
+    jobFunnelEvents: new AsyncSeriesHook(['events']),
+    jobTraversalCheckpointSaved: new AsyncSeriesHook(['payload']),
     sageTimeEnter: new AsyncSeriesHook(['args']),
     sageTimeExit: new AsyncSeriesHook(['args'])
   }

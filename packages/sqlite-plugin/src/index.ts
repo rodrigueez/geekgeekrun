@@ -20,6 +20,8 @@ import { VMarkAsNotSuitLog } from "./entity/VMarkAsNotSuitLog"
 import { ChatMessageRecord } from './entity/ChatMessageRecord'
 import { LlmModelUsageRecord } from './entity/LlmModelUsageRecord'
 import { JobHireStatusRecord } from './entity/JobHireStatusRecord'
+import { JobFunnelEvent } from './entity/JobFunnelEvent'
+import { JobTraversalCheckpoint } from './entity/JobTraversalCheckpoint'
 
 import {
   saveChatStartupRecord,
@@ -28,7 +30,11 @@ import {
   getNotSuitMarkRecordsInLastSomeDays,
   getChatStartupRecordsInLastSomeDays,
   getBossIdsByJobIds,
-  saveJobHireStatusRecord
+  saveJobHireStatusRecord,
+  saveJobFunnelEvents,
+  getRecentProcessedJobIds,
+  getJobTraversalCheckpoints,
+  saveJobTraversalCheckpoint
 } from "./handlers";
 import { UpdateChatStartupLogTable1729182577167 } from "./migrations/1729182577167-UpdateChatStartupLogTable";
 import minimist from 'minimist'
@@ -41,6 +47,8 @@ import { AddJobHireStatusTable1766466476822 } from "./migrations/1766466476822-A
 import { AddReasoningTokensToLlmModelUsageRecord1767000000000 } from "./migrations/1767000000000-AddReasoningTokensToLlmModelUsageRecord";
 import { AddQueryIndexes1767100000000 } from "./migrations/1767100000000-AddQueryIndexes";
 import { ScrubLlmUsageSecrets1767100000001 } from "./migrations/1767100000001-ScrubLlmUsageSecrets";
+import { AddJobTraversalTracking1767200000000 } from "./migrations/1767200000000-AddJobTraversalTracking";
+import { AddUserToJobHireStatusRecord1767200000001 } from "./migrations/1767200000001-AddUserToJobHireStatusRecord";
 import chunk from 'lodash/chunk'
 import * as typeorm from 'typeorm'
 
@@ -72,6 +80,8 @@ export function initDb(dbFilePath) {
       ChatMessageRecord,
       LlmModelUsageRecord,
       JobHireStatusRecord,
+      JobFunnelEvent,
+      JobTraversalCheckpoint,
     ],
     migrations: [
       Init1000000000000,
@@ -82,7 +92,9 @@ export function initDb(dbFilePath) {
       AddJobHireStatusTable1766466476822,
       AddReasoningTokensToLlmModelUsageRecord1767000000000,
       AddQueryIndexes1767100000000,
-      ScrubLlmUsageSecrets1767100000001
+      ScrubLlmUsageSecrets1767100000001,
+      AddJobTraversalTracking1767200000000,
+      AddUserToJobHireStatusRecord1767200000001
     ],
     migrationsRun: true
   });
@@ -127,6 +139,7 @@ export default class SqlitePlugin {
             JobHireStatus.CLOSED,
             JobHireStatus.DELETED
           ]),
+          encryptCurrentUserId: encryptUserId,
           lastSeenDate: typeorm.MoreThanOrEqual(
             new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
           )
@@ -164,6 +177,7 @@ export default class SqlitePlugin {
               await saveJobInfoFromRecommendPage(await ds, data.zpData)
               await saveJobHireStatusRecord(await ds, {
                 encryptJobId: data.zpData.jobInfo.encryptId,
+                encryptCurrentUserId: this.userInfo?.encryptUserId,
                 hireStatus: JobHireStatus.HIRING,
                 lastSeenDate: new Date()
               })
@@ -219,6 +233,7 @@ export default class SqlitePlugin {
       const ds = await this.initPromise;
       return await saveJobHireStatusRecord(ds, {
         encryptJobId: jobInfo.encryptId,
+        encryptCurrentUserId: this.userInfo?.encryptUserId,
         hireStatus: JobHireStatus.HIRING,
         lastSeenDate: new Date()
       });
@@ -243,6 +258,30 @@ export default class SqlitePlugin {
         markOp,
         jobSource
       });
+    });
+
+    hooks.jobTraversalStateLoaded?.tapPromise(
+      "SqlitePlugin",
+      async (encryptUserId, context) => {
+        if (!encryptUserId || !context) {
+          return;
+        }
+        const ds = await this.initPromise;
+        context.checkpoints = await getJobTraversalCheckpoints(ds, encryptUserId) ?? [];
+        context.processedJobIds = new Set(
+          await getRecentProcessedJobIds(ds, encryptUserId, 7) ?? []
+        );
+      }
+    );
+
+    hooks.jobFunnelEvents?.tapPromise("SqlitePlugin", async (events) => {
+      const ds = await this.initPromise;
+      return saveJobFunnelEvents(ds, events);
+    });
+
+    hooks.jobTraversalCheckpointSaved?.tapPromise("SqlitePlugin", async (payload) => {
+      const ds = await this.initPromise;
+      return saveJobTraversalCheckpoint(ds, payload);
     });
   }
 }

@@ -94,3 +94,12 @@ test('skips unparseable salary and blocked company names', () => {
     'COMPANY_BLOCKED'
   )
 })
+
+test('skips jobs already processed in a recent run', () => {
+  assert.equal(
+    getJobListSkipReason(baseJob, {
+      processedJobIds: new Set([baseJob.encryptJobId])
+    }),
+    'PROCESSED_RECENTLY'
+  )
+})

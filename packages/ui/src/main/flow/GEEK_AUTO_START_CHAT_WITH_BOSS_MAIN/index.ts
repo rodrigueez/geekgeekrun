@@ -102,6 +102,7 @@ const runAutoChat = async () => {
   await initPuppeteer()
 
   const hooks = {
+    runRecordId,
     puppeteerLaunched: new SyncHook(['browser']),
     pageGotten: new SyncHook(['page']),
     pageLoaded: new SyncHook(),
@@ -116,6 +117,9 @@ const runAutoChat = async () => {
     noPositionFoundAfterTraverseAllJob: new SyncHook(),
     errorEncounter: new SyncHook(['errorInfo']),
     encounterEmptyRecommendJobList: new AsyncSeriesHook(['args']),
+    jobTraversalStateLoaded: new AsyncSeriesHook(['encryptUserId', 'context']),
+    jobFunnelEvents: new AsyncSeriesHook(['events']),
+    jobTraversalCheckpointSaved: new AsyncSeriesHook(['payload']),
     sageTimeEnter: new AsyncSeriesHook(['args']),
     sageTimeExit: new AsyncSeriesHook(['args'])
   }
