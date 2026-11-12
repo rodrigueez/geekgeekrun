@@ -192,6 +192,12 @@ function handleMessage(socket, message) {
       } = message
       if (workers.has(workerId)) {
         console.log(`工具进程 ${workerId} 已在运行`);
+        sendResponse(socket, _callbackUuid, {
+          success: false,
+          alreadyRunning: true,
+          message: `工具进程 ${workerId} 已在运行`,
+          workerId
+        });
         return;
       }
       startWorker({
