@@ -290,13 +290,17 @@ function handleProgress(_event, payload) {
   chatProgressText.value = `${stageMap[payload.stage] ?? payload.stage} ${index}/${total}`
 }
 
+let unlistenChatProgress
 onMounted(() => {
-  window.electron.ipcRenderer.on('candidate-chat-progress', handleProgress)
+  unlistenChatProgress = window.electron.ipcRenderer.on(
+    'candidate-chat-progress',
+    handleProgress
+  )
   void getList()
 })
 
 onBeforeUnmount(() => {
-  window.electron.ipcRenderer.off('candidate-chat-progress', handleProgress)
+  unlistenChatProgress?.()
 })
 </script>
 
