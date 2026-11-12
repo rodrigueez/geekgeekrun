@@ -131,6 +131,9 @@ export class CookieInvalidHandlePlugin {
             })
             throw new Error('LOGIN_STATUS_INVALID')
           }
+          // 登录助手本身出错时不要静默重试，否则会变成没有间隔的死循环。
+          console.log('login with cookie assistant failed', e)
+          throw e
         }
       }
       sendToDaemon({
